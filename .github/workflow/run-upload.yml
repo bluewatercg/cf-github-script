@@ -1,0 +1,29 @@
+name: Gist Manager
+on:
+  workflow_dispatch:
+    inputs:
+      files:
+        description: "文件路径（支持通配符如 *.log，多个文件用空格隔开）" # 输入示例: "README.md config.yaml"
+        default: "" # 可选：可以设置默认值
+        required: true
+
+jobs:
+  manage-gist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # 安全建议
+
+      - name: Execute Script
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+        run: |
+          # 添加参数验证逻辑
+          if [ -z "${{ inputs.files }}" ]; then
+            echo "错误：未指定文件参数" >&2
+            exit 1
+          fi
+          ./upload_to_gist.sh ${{ inputs.files }}
