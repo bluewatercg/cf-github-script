@@ -1,4 +1,4 @@
-name: Gist Manager
+name: 上传文件到gist
 on:
   workflow_dispatch:
     inputs:
@@ -26,4 +26,4 @@ jobs:
             echo "错误：未指定文件参数" >&2
             exit 1
           fi
-          ./upload_to_gist.sh ${{ inputs.files }}
+          ./gist-raw/upload_to_gist.sh ${{ inputs.files }}
