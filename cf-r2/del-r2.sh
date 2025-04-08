@@ -1,9 +1,10 @@
 #!/bin/bash
 # 配置参数
-BUCKET_NAME="your-bucket"
+BUCKET_NAME="your-bucket" # 存储桶名称
+ACCOUNT_ID= ""  # Cloudflare 账户ID
 R2_ENDPOINT="https://${ACCOUNT_ID}.r2.cloudflarestorage.com"
-ACCESS_KEY="your_access_key"
-SECRET_KEY="your_secret_key"
+ACCESS_KEY="your_access_key" # R2 Access Key ID
+SECRET_KEY="your_secret_key" # R2 Access Secret Key
 KEEP=3
 MAX_ITEMS=1000  # 单次请求最大文件数（Cloudflare R2限制）
 
