@@ -77,7 +77,7 @@ const HTML = `
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Gist Uploader</title>
+  <title>Gist直链上传工具</title>
   <style>
     body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
     .dropzone { 
@@ -96,13 +96,13 @@ const HTML = `
   </style>
 </head>
 <body>
-  <h1>Upload Files to Gist</h1>
+  <h1>上传文件到 Gist</h1>
   <div class="dropzone" id="dropzone">
-    <p>Drag & drop files here or click to select</p>
+    <p>拖放文件到此处 或 单击选择</p>
     <input type="file" id="file-input" multiple style="display: none;">
   </div>
-  <div id="file-list"></div>
-  <button id="upload-btn">Upload to Gist</button>
+  <div id="文件列表"></div>
+  <button id="upload-btn">上传到 Gist</button>
   <div id="result"></div>
 
   <script>
