@@ -1,50 +1,44 @@
-// 通用响应构造器
+// 造器通用响应构
 const jsonResponse = (data, status = 200, headers = {}) => 
   new Response(JSON.stringify(data), { 
     status, 
-    headers: { 'Content-Type': 'application/json', ...headers }
+    headers: { 'Content-Type': 'application/json', ...headers } 
   });
 
-const htmlResponse = (html, headers) =>
+const htmlResponse = (html, headers = {}) =>
   new Response(html, { headers: { 'Content-Type': 'text/html', ...headers } });
+
+const corsHeaders = (headers = {}) => ({
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  ...headers
+});
 
 export default {
   async fetch(request, env) {
     const { pathname, searchParams } = new URL(request.url);
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    };
-
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders });
-    }
-
-    // 数据库初始化
+    if (request.method === 'OPTIONS') return new Response(null, { headers: corsHeaders() });
+    
     await initializeDatabase(env.GH_DB);
-
-    // 简化路由配置
+    
     const routes = {
-      '/': () => htmlResponse(HTML, corsHeaders),
-      '/list': () => htmlResponse(listHTML, corsHeaders),
+      '/': () => htmlResponse(HTML, corsHeaders()),
+      '/list': () => htmlResponse(listHTML, corsHeaders()),
       '/api/upload': () => handleUpload(request, env, corsHeaders),
       '/api/qry': () => handleFileQuery(env, searchParams, corsHeaders),
-      '/api/rec/(.+)': (_, id) => handleDeleteRecord(id, env, corsHeaders),
-      '/api/file/(.+)': (_, id) => handleDeleteFile(id, request, env, corsHeaders)
+      '/api/rec/(\\d+)': (req, id) => handleDeleteRecord(id, env, corsHeaders, req)
     };
 
-    // 路由匹配执行
     for (const [path, handler] of Object.entries(routes)) {
       const match = pathname.match(new RegExp(`^${path}$`));
-      if (match) return await handler(...match.slice(1));
+      if (match) return await handler(request, ...match.slice(1));
     }
-
-    return jsonResponse({ error: 'Not Found' }, 404, corsHeaders);
+    return jsonResponse({ error: '不存在' }, 404, corsHeaders);
   }
 };
 
-// ========== 数据库初始化 ==========
+// ========== 初始化数据库 ==========
 async function initializeDatabase(db) {
   try {
     await db.prepare(`
@@ -60,17 +54,16 @@ async function initializeDatabase(db) {
         github_branch TEXT DEFAULT 'main',
         github_path TEXT DEFAULT '/',
         page_url TEXT,
-        direct_url TEXT,
-        is_deleted BOOLEAN DEFAULT 0
+        direct_url TEXT
       )
     `).run();
-    console.log('数据库初始化完成');
   } catch (error) {
     console.error('数据库初始化错误:', error);
     throw error;
   }
 }
-// ========== 上传处理 ==========
+
+// ========== 上传请求 ==========
 async function handleUpload(request, env, corsHeaders) {
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'Method Not Allowed' }, 405, corsHeaders);
@@ -79,10 +72,7 @@ async function handleUpload(request, env, corsHeaders) {
   try {
     const formData = await request.formData();
     const files = formData.getAll('files');
-    
-    if (files.length === 0) {
-      return jsonResponse({ error: 'No files selected' }, 400, corsHeaders);
-    }
+    if (!files.length) return jsonResponse({ error: '未选择任何文件' }, 400, corsHeaders);
 
     const results = await Promise.all(
       files.map(async file => {
@@ -115,7 +105,6 @@ async function processSingleFile(file, formData, env) {
   } else {
     await processGitHub(file, formData, fileData, env);
   }
-
   return fileData;
 }
 
@@ -124,75 +113,67 @@ async function processGist(file, formData, fileData, env) {
   const isPublic = formData.get('gist-public') === 'on';
   const existingGistId = formData.get('existing-gist')?.trim();
   const content = await file.text();
-  const gistUrl = existingGistId
+  const gistUrl = existingGistId 
     ? `https://api.github.com/gists/${existingGistId}`
     : 'https://api.github.com/gists';
 
-  try { 
-    const response = await fetch(gistUrl, {
-      method: existingGistId ? 'PATCH' : 'POST',
-      headers: {
-        'Authorization': `token ${env.GH_TOKEN}`,
-        'Accept': 'application/vnd.github.v3+json',
-        'Content-Type': 'application/json',
-        'User-Agent': 'Cloudflare-Worker-Gist-Uploader/1.0',
-      },
-      body: JSON.stringify({
-        public: isPublic,
-        files: { [file.name]: { content } }
-      }),
-    });
+  const response = await fetch(gistUrl, {
+    method: existingGistId ? 'PATCH' : 'POST',
+    headers: {
+      'Authorization': `token ${env.GH_TOKEN}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'Cloudflare-Worker-Gist',
+    },
+    body: JSON.stringify({
+      public: isPublic,
+      files: { [file.name]: { content } }
+    }),
+  });
 
-    if (!response.ok) throw new Error(`Gist API Error: ${await response.text()}`);
-    const gist = await response.json();
+  if (!response.ok) throw new Error(`Gist API 错误: ${await response.text()}`);
+  
+  const gist = await response.json();
+  if (!gist.owner?.login) throw new Error('Gist 缺少用户名信息');
 
-    fileData.page_url = gist.html_url;
-    fileData.direct_url = `https://gist.githubusercontent.com/${gist.owner.login}/${gist.id}/raw/${file.name}`;
-    fileData.gist_id = gist.id;
-  } catch (error) {
-    throw new Error(`Network error: ${error.message}`);
-  }
+  fileData.page_url = gist.html_url;
+  fileData.direct_url = buildDirectUrl('gist', gist.owner.login, gist.id, '', '', file.name);
+  fileData.gist_id = gist.id;
 }
 
-// ========== GitHub 处理 ==========
+// ========== Github处理 ==========
 async function processGitHub(file, formData, fileData, env) {
   const username = formData.get('gh-username')?.trim();
   const repo = formData.get('gh-repo')?.trim();
+  if (!username || !repo) throw new Error('需要 GitHub 用户名和仓库名');
+ 
   const branch = formData.get('gh-branch')?.trim() || 'main';
   const path = formData.get('gh-path')?.trim() || '/';
-
-  if (!username || !repo) {
-    throw new Error('GitHub 用户名和仓库名为必填项');
-  }
-
   const content = encodeBase64(await file.text());
-  const cleanPathValue = path.replace(/^\/+|\/+$/g, '');
-  const apiPath = cleanPathValue ? `${cleanPathValue}/${file.name}` : file.name;
-  const apiUrl = `https://api.github.com/repos/${username}/${repo}/contents/${apiPath}`;
+  const cleanPath = path.replace(/^\/+|\/+$/g, '');
+  const apiPath = cleanPath ? `${encodeURIComponent(cleanPath)}/${encodeURIComponent(file.name)}` : encodeURIComponent(file.name);
+  const apiUrl = `https://api.github.com/repos/${username}/${repo}/contents/${apiPath}?ref=${branch}`;
 
-  // 获取 SHA 用于更新已有文件
+  // 获取已有文件的SHA
   let sha;
   try {
-    const shaRes = await fetch(apiUrl, {
-      headers: { 'Authorization': `token ${env.GH_TOKEN}` }
+    const shaRes = await fetch(apiUrl, { 
+      headers: { 
+        'Authorization': `token ${env.GH_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      } 
     });
+
+    if (shaRes.status === 401) throw new Error('Token 无效或权限不足');
+    if (shaRes.status === 404) console.log('文件不存在，将创建新记录');
     if (shaRes.ok) {
-      const shaData = await shaRes.json();
-      sha = shaData.sha;
+      const data = await shaRes.json();
+      sha = data.sha;
     }
   } catch (error) {
-    console.error('Failed to get SHA:', error);
-  }
-
-  const requestBody = {
-    message: `Upload via File Server: ${file.name}`,
-    content,
-    branch
-  };
-
-  // 只有在获取到SHA时才添加sha字段
-  if (sha) {
-    requestBody.sha = sha;
+    console.error('SHA 获取失败:', error);
+    throw error;
   }
 
   const response = await fetch(apiUrl, {
@@ -201,23 +182,37 @@ async function processGitHub(file, formData, fileData, env) {
       'Authorization': `token ${env.GH_TOKEN}`,
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
-      'User-Agent': 'Cloudflare-Worker-Gist-Uploader/1.0',
+      'User-Agent': 'Cloudflare-Worker-Gist',
     },
-    body: JSON.stringify(requestBody),
+    body: JSON.stringify({
+      message: `Git-Files upload: ${file.name}`,
+      content,
+      branch,
+      ...(sha && { sha })
+    }),
   });
 
-  if (!response.ok) throw new Error(`GitHub API Error: ${await response.text()}`);
-  const githubRes = await response.json();
+  if (!response.ok) throw new Error(`GitHub API 错误: ${await response.text()}`);
 
-  fileData.page_url = githubRes.html_url;
-  fileData.direct_url = buildDirectUrl(username, repo, branch, cleanPathValue, file.name, env.CF_DOMAIN);
+  const cleanPathForUrl = cleanPath ? `${cleanPath}/` : '';
+  fileData.page_url = `https://github.com/${username}/${repo}/blob/${branch}/${cleanPathForUrl}${file.name}`;
+  fileData.direct_url = buildDirectUrl('github', username, repo, branch, cleanPath, file.name);
   fileData.github_username = username;
   fileData.github_repo = repo;
   fileData.github_branch = branch;
-  fileData.github_path = cleanPathValue;
+  fileData.github_path = cleanPath;
 }
 
-// ========== 数据库操作 ==========
+// 拼接直链地址
+function buildDirectUrl(uploadType, username, idORrepo, branch, path, filename) {
+  const basePath = path ? `${path}/` : '';
+  const filePath = `${basePath}${filename}`.replace(/\/+/g, '/');
+  return uploadType === 'gist'
+    ? `https://gist.githubusercontent.com/${username}/${idORrepo}/raw/${filename}`
+    : `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`;
+}
+
+// 数据库操作
 async function saveToDatabase(data, db) {
   const { 
     filename, filesize, upload_type, upload_time,
@@ -229,8 +224,8 @@ async function saveToDatabase(data, db) {
     INSERT INTO git_files (
       filename, filesize, upload_type, upload_time,
       gist_id, github_username, github_repo,
-      github_branch, github_path, page_url, direct_url, is_deleted
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      github_branch, github_path, page_url, direct_url
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     filename || '',
     filesize || '',
@@ -242,93 +237,48 @@ async function saveToDatabase(data, db) {
     github_branch || 'main',
     github_path || '/',
     page_url || '',
-    direct_url || '',
-    0 // 明确标记未删除
+    direct_url || ''
   ).run();
 }
 
-// ========== 文件查询 ==========
+// 文件查询
 async function handleFileQuery(env, params, corsHeaders) {
   const page = parseInt(params.get('page')) || 1;
   const limit = 20;
-  console.log('Querying database with limit:', limit, 'offset:', (page - 1) * limit);
   const result = await env.GH_DB.prepare(`
     SELECT id, filename, filesize, upload_type,
            upload_time, page_url, direct_url
     FROM git_files
-    WHERE is_deleted = 0
     ORDER BY upload_time DESC
     LIMIT ? OFFSET ?
   `).bind(limit, (page - 1) * limit).all();
-  console.log('Query result:', result);
-  // 确保返回的是数组格式
-  const files = result.results || result.rows || [];
-  return jsonResponse(files, 200, corsHeaders);
+  
+  return jsonResponse(result.results || result.rows || [], 200, corsHeaders);
 }
 
-// ========== 删除记录 ==========
-async function handleDeleteRecord(id, env, corsHeaders) {
-  await env.GH_DB.prepare(`
-    UPDATE git_files SET is_deleted = 1 WHERE id = ?
-  `).bind(id).run();
-  return jsonResponse({ success: true }, 200, corsHeaders);
-}
-
-// ========== 删除文件 ==========
-async function handleDeleteFile(id, request, env, corsHeaders) {
-  const row = await env.GH_DB.prepare(`
-    SELECT * FROM git_files WHERE id = ? AND is_deleted = 0
-  `).bind(id).first();
-
-  if (!row) {
-    return jsonResponse({ error: 'File not found' }, 404, corsHeaders);
+// 删除数据库记录
+async function handleDeleteRecord(id, env, corsHeaders, request) {
+  if (request.method !== 'DELETE') {
+    return jsonResponse({ error: '不支持的方式' }, 405, corsHeaders);
   }
 
   try {
-    if (row.upload_type === 'gist') {
-      await deleteGist(row.gist_id, env.GH_TOKEN);
-    } else {
-      await deleteGitHub(row, env.GH_TOKEN);
-    }
-    return await handleDeleteRecord(id, env, corsHeaders);
+    const result = await env.GH_DB.prepare(`
+      DELETE FROM git_files WHERE id = ?
+    `).bind(id).run();
+
+    return result.success
+      ? jsonResponse({ success: true, id }, 200, corsHeaders)
+      : jsonResponse({ error: '数据库更新失败' }, 500, corsHeaders);
   } catch (err) {
-    return jsonResponse({ error: err.message }, 500, corsHeaders);
+    return jsonResponse({
+      error: `Delete failed: ${err.message}`,
+      ...(env.ENVIRONMENT === 'development' && { stack: err.stack })
+    }, 500, corsHeaders);
   }
 }
 
-// ========== 删除Gist文件 ==========
-async function deleteGist(gistId, token) {
-  await fetch(`https://api.github.com/gists/${gistId}`, {
-    method: 'DELETE',
-    headers: { 'Authorization': `token ${token}` }
-  });
-}
-
-// ========== 删除GitHub文件 ==========
-async function deleteGitHub(row, token) {
-  const { github_username, github_repo, github_branch, github_path, filename } = row;
-  const apiUrl = `https://api.github.com/repos/${github_username}/${github_repo}/contents/${github_path}/${filename}`;
-  const shaResponse = await fetch(apiUrl, {
-    headers: { 'Authorization': `token ${token}` }
-  });
-  if (!shaResponse.ok) throw new Error(`GitHub API Error: ${await shaResponse.text()}`);
-  const shaData = await shaResponse.json();
-
-  await fetch(apiUrl, {
-    method: 'DELETE',
-    headers: {
-      'Authorization': `token ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      message: `Delete: ${filename}`,
-      sha: shaData.sha,
-      branch: github_branch
-    })
-  });
-}
-
-// ========== 格式化文件大小 ==========
+// 格式化文件大小
 function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -336,19 +286,12 @@ function formatSize(bytes) {
   return `${(bytes / 1073741824).toFixed(1)} GB`;
 }
 
-// ========== 构建直接访问URL ==========
-function buildDirectUrl(username, repo, branch, path, filename, cfDomain) {
-  const basePath = path || '';
-  const cfUrl = cfDomain
-    ? `https://${cfDomain}/${username}/${repo}/${branch}/${basePath}/${filename}`
-    : `https://raw.githubusercontent.com/${username}/${repo}/${branch}/${basePath}/${filename}`;
-  return cfUrl.replace(/\/+/g, '/');
-}
-
+// 编码函数
 function encodeBase64(str) {
   return btoa(unescape(encodeURIComponent(str)));
 }
 
+// 北京时间函数
 function bjTime(timestamp) {
   return new Date(timestamp).toLocaleString('zh-CN', {
     timeZone: 'Asia/Shanghai',
@@ -362,17 +305,18 @@ function bjTime(timestamp) {
   });
 }
 
+// HTML版权页
 function copyright() {
   return `
     <p class="mb-0">
       <span class="item">Copyright © 2025 Yutian81</span>
       <span class="separator mx-2">|</span>
       <a href="https://github.com/yutian81/slink/" class="item text-blue-600 hover:text-blue-800" target="_blank">
-        <i class="fab fa-github me-1"></i>  GitHub
+        <i class="fab fa-github me-1"></i> GitHub
       </a>
       <span class="separator mx-2">|</span>
       <a href="https://blog.811520.xyz/" class="item text-blue-600 hover:text-blue-800" target="_blank">  
-        <i class="fas fa-blog me-1"></i>  青云志博客
+        <i class="fas fa-blog me-1"></i> 青云志博客
       </a>
     </p>
   `;
@@ -481,7 +425,7 @@ const HTML = `<!DOCTYPE html>
           <i class="fab fa-github mr-2"></i>项目仓库
         </a>
         <h1 class="text-2xl font-bold text-white text-center">GitHub 文件服务器</h1>
-        <a href="/list" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">文件管理</a>
+        <a href="/list" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"><i class="fas fa-folder-open mr-2"></i>文件管理</a>
       </div>
     </div>
   </nav>
@@ -739,7 +683,7 @@ const HTML = `<!DOCTYPE html>
             <a href="\${escapeHtml(result.page_url)}" target="_blank" class="text-blue-600 hover:underline">查看</a>
           </td>
           <td class="px-4 py-2">
-            <a href="\${escapeHtml(result.direct_url)}" target="_blank" class="text-blue-600 hover:underline">访问</a>
+            <a href="\${escapeHtml(result.direct_url)}" target="_blank" class="text-blue-600 hover:underline">查看</a>
           </td>
         </tr>
       \`).join('');
@@ -760,101 +704,147 @@ const listHTML = `<!DOCTYPE html>
   <link href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
   <style>
-    body { 
-      background-color: #f3f4f6; 
-      padding-bottom: 5rem;
-    }
-    .footer {
-      background-color: #1e3a8a;
-      color: white;
-      padding: 1rem;
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      font-size: 0.875rem;
-      z-index: 10;
-    }
-    .footer a { color: white; }
-    .footer a:hover { color: #bfdbfe; }
-    .action-btn {
-      padding: 0.5rem 1rem;
-      border-radius: 0.375rem;
-      color: white;
-      transition: all 0.2s;
-      display: inline-flex;
-      align-items: center;
-    }
-    .action-btn-blue {
-      background-color: #3b82f6;
-    }
-    .action-btn-blue:hover {
-      background-color: #2563eb;
-    }
-    .action-btn-red {
-      background-color: #ef4444;
-    }
-    .action-btn-red:hover {
-      background-color: #dc2626;
-    }
-    .table-container {
-      overflow-x: auto;
-      border: 1px solid #e5e7eb;
-      border-radius: 0.5rem;
-      margin-bottom: 4rem;
-      background-color: white;
-    }
-    .table {
-      width: 100%;
-    }
-    .table th, .table td {
-      padding: 0.75rem;
-      font-size: 0.875rem;
-      border: 1px solid #e5e7eb;
-    }
-    .table th {
-      background-color: #f9fafb;
-      font-weight: 600;
-      color: #4b5563;
-    }
-    .table tbody tr:hover {
-      background-color: #f3f4f6;
-    }
-    .form-input {
-      border: 1px solid #e5e7eb;
-      border-radius: 0.375rem;
-      padding: 0.5rem 0.75rem;
-      height: 2.5rem;
-    }
-    .form-checkbox {
-      border: 1px solid #e5e7eb;
-      border-radius: 0.25rem;
-      height: 1.25rem;
-      width: 1.25rem;
-    }
-    #search-input {
-      width: 300px;
-      border: 1px solid #e5e7eb;
-      border-radius: 0.375rem;
-      padding: 0.5rem 0.75rem;
-      height: 2.5rem;
-    }
-    .main-container {
-      min-height: calc(100vh - 10rem);
-    }
-    .nav-container {
-      background-color: #1e40af;
-    }
-    .button-group {
-      display: flex;
-      justify-content: space-between;
-      width: 100%;
-      margin-bottom: 1rem;
-    }
-    .left-buttons, .right-buttons {
-      display: flex;
-      gap: 0.5rem;
-    }
+      body { 
+        background-color: #f3f4f6; 
+        padding-bottom: 5rem;
+      }
+      .main-container {
+        min-height: calc(100vh - 10rem);
+      }
+      
+      /* 表格相关样式 */
+      .table-container {
+        overflow-x: auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 0.5rem;
+        margin-bottom: 4rem;
+        background-color: white;
+      }
+      .table {
+        width: 100%;
+      }
+      .table th, 
+      .table td {
+        text-align: center;
+        vertical-align: middle;
+        padding: 0.75rem;
+        font-size: 0.875rem;
+        border: 1px solid #e5e7eb;
+      }
+      .table th {
+        background-color: #f9fafb;
+        font-weight: 600;
+        color: #4b5563;
+      }
+      .table tbody tr:hover {
+        background-color: #f3f4f6;
+      }
+      
+      /* 按钮相关样式 */
+      .action-buttons {
+        display: flex;
+        justify-content: center;
+        gap: 1rem;
+        color: #ef4444;
+      }
+      .action-btn {
+        padding: 0.5rem 1rem;
+        border-radius: 0.375rem;
+        color: white;
+        transition: all 0.2s;
+        display: inline-flex;
+        align-items: center;
+      }
+      .action-btn-blue {
+        background-color: #3b82f6;
+      }
+      .action-btn-blue:hover {
+        background-color: #2563eb;
+      }
+      .action-btn-red {
+        background-color: #ef4444;
+      }
+      .action-btn-red:hover {
+        background-color: #dc2626;
+      }
+      .button-group {
+        display: flex;
+        justify-content: space-between;
+        width: 100%;
+        margin-bottom: 1rem;
+      }
+      .left-buttons, 
+      .right-buttons {
+        display: flex;
+        gap: 0.5rem;
+      }
+      
+      /* 表单元素样式 */
+      .form-checkbox {
+        margin: 0 auto;
+        display: block;
+        border: 1px solid #e5e7eb;
+        border-radius: 0.25rem;
+        height: 1.25rem;
+        width: 1.25rem;
+      }
+      .form-input,
+      #search-input {
+        border: 1px solid #e5e7eb;
+        border-radius: 0.375rem;
+        padding: 0.5rem 0.75rem;
+        height: 2.5rem;
+      }
+      #search-input {
+        width: 300px;
+      }
+      
+      /* 导航和页脚样式 */
+      .nav-container {
+        background-color: #1e40af;
+      }
+      .footer {
+        background-color: #1e3a8a;
+        color: white;
+        padding: 1rem;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        font-size: 0.875rem;
+        z-index: 10;
+      }
+      .footer a {
+        color: white;
+      }
+      .footer a:hover {
+        color: #bfdbfe;
+      }
+      /* 新增样式 */
+      .text-link {
+        color: #3b82f6;
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .text-link:hover {
+        color: #2563eb;
+        text-decoration: underline;
+      }
+
+      /* 响应式调整 */
+      @media (max-width: 768px) {
+        .button-group {
+          flex-direction: column;
+          gap: 0.5rem;
+        }
+        .left-buttons, .right-buttons {
+          justify-content: space-between;
+          width: 100%;
+        }
+        #search-input {
+          width: 200px;
+        }
+      }
   </style>
 </head>
 <body>
@@ -864,7 +854,10 @@ const listHTML = `<!DOCTYPE html>
         <i class="fas fa-arrow-left mr-2"></i> 返回首页
       </a>
       <h1 class="text-2xl font-bold text-white text-center">文件管理</h1>
-      <input type="search" id="search-input" placeholder="搜索文件">
+      <div class="relative">
+        <input type="search" id="search-input" placeholder="搜索文件" class="pl-3 pr-10 py-2 w-full border rounded-lg">
+        <i class="fas fa-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+      </div>
     </div>
   </nav>
 
@@ -882,9 +875,6 @@ const listHTML = `<!DOCTYPE html>
         <div class="right-buttons">
           <button id="delete-records" class="action-btn action-btn-red">
             <i class="fas fa-trash-alt mr-2"></i>删除记录
-          </button>
-          <button id="delete-files" class="action-btn action-btn-red">
-            <i class="fas fa-file-times mr-2"></i>删除文件
           </button>
           <button id="copy-urls" class="action-btn action-btn-blue">
             <i class="fas fa-copy mr-2"></i>复制直链
@@ -904,7 +894,6 @@ const listHTML = `<!DOCTYPE html>
               <th>上传时间</th>
               <th>页面地址</th>
               <th>直链地址</th>
-              <th>操作</th>
             </tr>
           </thead>
           <tbody id="file-table-body"></tbody>
@@ -960,16 +949,10 @@ const listHTML = `<!DOCTYPE html>
           <td>\${index + 1}(\${file.id})</td>
           <td>\${file.filename}</td>
           <td>\${file.filesize}</td>
-          <td>\${file.upload_type.toUpperCase()}</td>
+          <td>\${file.upload_type === 'github' ? 'GitHub' : 'Gist'}</td>
           <td>\${bjTime(file.upload_time)}</td>
-          <td><a href="\${file.page_url}" target="_blank" class="text-green-600 hover:underline">查看</a></td>
-          <td>
-            <span class="direct-url text-blue-600 hover:underline cursor-pointer" data-url="\${file.direct_url}">复制</span>
-          </td>
-          <td>
-            <button class="delete-record text-red-600 hover:underline cursor-pointer" data-id="\${file.id}">删除记录</button>
-            <button class="delete-file text-red-600 hover:underline cursor-pointer ml-4" data-id="\${file.id}">删除文件</button>
-          </td>
+          <td><a href="\${file.page_url}" target="_blank" class="text-link">查看</a></td>
+          <td><a href="\${file.direct_url}" target="_blank" class="text-link">查看</a></td>
         </tr>
       \`).join('');
     }
@@ -1012,34 +995,28 @@ const listHTML = `<!DOCTYPE html>
       checkboxes.forEach(checkbox => checkbox.checked = !checkbox.checked);
     });
 
+    function getSelectedIds() {
+      return Array.from(document.querySelectorAll('.form-checkbox:checked'))
+        .map(checkbox => checkbox.dataset.id)
+        .filter(id => id);
+    }
+
     // 批量删除记录
     document.getElementById('delete-records').addEventListener('click', async function() {
       const ids = getSelectedIds();
       if (ids.length === 0) return alert('请选择要删除的记录');
-      
       if (!confirm(\`确定要删除 \${ids.length} 条记录吗？\`)) return;
-      
       try {
-        const promises = ids.map(id => fetch(\`/api/rec/\${id}\`, { method: 'DELETE' }));
-        await Promise.all(promises);
+        const results = await Promise.allSettled(
+          ids.map(id => fetch(\`/api/rec/$\{id}\`, { method: 'DELETE' }))
+        );
+        
+        const failedDeletes = results.filter(r => !r.value || !r.value.ok);
+        if (failedDeletes.length > 0) {
+          throw new Error(\`\${failedDeletes.length}条记录删除失败\`);
+        }
+        
         alert('成功删除选中记录');
-        loadPaginatedFiles(currentPage);
-      } catch (error) {
-        alert('删除失败: ' + error.message);
-      }
-    });
-
-    // 批量删除文件
-    document.getElementById('delete-files').addEventListener('click', async function() {
-      const ids = getSelectedIds();
-      if (ids.length === 0) return alert('请选择要删除的文件');
-      
-      if (!confirm(\`确定要删除 \${ids.length} 个文件吗？此操作不可逆！\`)) return;
-      
-      try {
-        const promises = ids.map(id => fetch(\`/api/file/\${id}\`, { method: 'DELETE' }));
-        await Promise.all(promises);
-        alert('成功删除选中文件');
         loadPaginatedFiles(currentPage);
       } catch (error) {
         alert('删除失败: ' + error.message);
@@ -1050,47 +1027,17 @@ const listHTML = `<!DOCTYPE html>
     document.getElementById('copy-urls').addEventListener('click', function() {
       const selectedCheckboxes = document.querySelectorAll('.form-checkbox:checked');
       const urls = [];
+      
       selectedCheckboxes.forEach(checkbox => {
         const row = checkbox.closest('tr');
-        const directUrl = row.querySelector('.direct-url').dataset.url;
+        const directUrl = row.querySelector('td:nth-child(8) a').href;
         urls.push(directUrl);
       });
       
       if (urls.length === 0) return alert('请选择要复制的文件');
-      
       navigator.clipboard.writeText(urls.join('\\n'));
       alert(\`已复制 \${urls.length} 个直链\`);
     });
-
-    // 单行操作
-    document.getElementById('file-table-body').addEventListener('click', function(e) {
-      const target = e.target;
-      const id = target.dataset.id;
-      const url = target.dataset.url;
-      
-      if (target.classList.contains('delete-record')) {
-        if (confirm('确定要删除此记录吗？')) {
-          fetch(\`/api/rec/\${id}\`, { method: 'DELETE' })
-            .then(() => loadPaginatedFiles(currentPage))
-            .catch(err => alert('删除失败: ' + err.message));
-        }
-      } else if (target.classList.contains('delete-file')) {
-        if (confirm('确定要删除此文件吗？此操作不可逆！')) {
-          fetch(\`/api/file/\${id}\`, { method: 'DELETE' })
-            .then(() => loadPaginatedFiles(currentPage))
-            .catch(err => alert('删除失败: ' + err.message));
-        }
-      } else if (target.classList.contains('direct-url')) {
-        navigator.clipboard.writeText(url);
-        alert('直链已复制');
-      }
-    });
-
-    function getSelectedIds() {
-      return Array.from(document.querySelectorAll('.form-checkbox:checked'))
-        .map(checkbox => checkbox.dataset.id)
-        .filter(id => id);
-    }
   </script>
 </body>
 </html>`;
