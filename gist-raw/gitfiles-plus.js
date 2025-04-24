@@ -1,4 +1,4 @@
-// 造器通用响应构
+// 通用响应构造器
 const jsonResponse = (data, status = 200, headers = {}) => 
   new Response(JSON.stringify(data), { 
     status, 
@@ -11,20 +11,44 @@ const htmlResponse = (html, headers = {}) =>
 const corsHeaders = (headers = {}) => ({
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   ...headers
 });
 
+// API鉴权函数
+function authRequest(request, env) {
+  if (request.method === 'OPTIONS') return true;
+  const { pathname } = new URL(request.url);
+  if (pathname === '/' || pathname === '/list') return true;
+  
+  // 验证API_TOKEN
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader) return false;
+  const token = authHeader.replace('Bearer ', '').trim();
+  return token === env.API_TOKEN;
+}
+
 export default {
   async fetch(request, env) {
+    if (!authRequest(request, env)) {
+      return jsonResponse({ error: '未经授权的访问' }, 401, corsHeaders());
+    } // 鉴权检查
+
     const { pathname, searchParams } = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: corsHeaders() });
     
     await initializeDatabase(env.GH_DB);
     
+    const apiToken = env.API_TOKEN || 'auto';
     const routes = {
       '/': () => htmlResponse(HTML, corsHeaders()),
-      '/list': () => htmlResponse(listHTML, corsHeaders()),
+      '/list': () => {
+        const listHTMLWithToken = listHTML.replace(
+          '<meta name="apiToken" content="api_token">',
+          `<meta name="apiToken" content="${apiToken}">`
+        );
+        return htmlResponse(listHTMLWithToken, corsHeaders());
+      },
       '/api/upload': () => handleUpload(request, env, corsHeaders),
       '/api/qry': () => handleFileQuery(env, searchParams, corsHeaders),
       '/api/rec/(\\d+)': (req, id) => handleDeleteRecord(id, env, corsHeaders, req)
@@ -66,7 +90,7 @@ async function initializeDatabase(db) {
 // ========== 上传请求 ==========
 async function handleUpload(request, env, corsHeaders) {
   if (request.method !== 'POST') {
-    return jsonResponse({ error: 'Method Not Allowed' }, 405, corsHeaders);
+    return jsonResponse({ error: '不支持该请求方式' }, 405, corsHeaders);
   }
 
   try {
@@ -85,8 +109,7 @@ async function handleUpload(request, env, corsHeaders) {
     return jsonResponse(results, 201, corsHeaders);
   } catch (err) {
     return jsonResponse({ 
-      error: err.message,
-      ...(env.ENVIRONMENT === 'development' && { stack: err.stack })
+      error: err.message
     }, 500, corsHeaders);
   }
 }
@@ -108,6 +131,16 @@ async function processSingleFile(file, formData, env) {
   return fileData;
 }
 
+// Github API 请求头
+function getGitHubHeaders(env) {
+  return {
+    'Authorization': `token ${env.GH_TOKEN}`,
+    'Accept': 'application/vnd.github.v3+json',
+    'Content-Type': 'application/json',
+    'User-Agent': 'Cloudflare-Worker-Github',
+  };
+}
+
 // ========== Gist处理 ==========
 async function processGist(file, formData, fileData, env) {
   const isPublic = formData.get('gist-public') === 'on';
@@ -119,12 +152,7 @@ async function processGist(file, formData, fileData, env) {
 
   const response = await fetch(gistUrl, {
     method: existingGistId ? 'PATCH' : 'POST',
-    headers: {
-      'Authorization': `token ${env.GH_TOKEN}`,
-      'Accept': 'application/vnd.github.v3+json',
-      'Content-Type': 'application/json',
-      'User-Agent': 'Cloudflare-Worker-Gist',
-    },
+    headers: getGitHubHeaders(env),
     body: JSON.stringify({
       public: isPublic,
       files: { [file.name]: { content } }
@@ -158,11 +186,7 @@ async function processGitHub(file, formData, fileData, env) {
   let sha;
   try {
     const shaRes = await fetch(apiUrl, { 
-      headers: { 
-        'Authorization': `token ${env.GH_TOKEN}`,
-        'Accept': 'application/vnd.github.v3+json',
-        'Content-Type': 'application/json'
-      } 
+      headers: getGitHubHeaders(env)
     });
 
     if (shaRes.status === 401) throw new Error('Token 无效或权限不足');
@@ -178,12 +202,7 @@ async function processGitHub(file, formData, fileData, env) {
 
   const response = await fetch(apiUrl, {
     method: 'PUT',
-    headers: {
-      'Authorization': `token ${env.GH_TOKEN}`,
-      'Accept': 'application/vnd.github.v3+json',
-      'Content-Type': 'application/json',
-      'User-Agent': 'Cloudflare-Worker-Gist',
-    },
+    headers: getGitHubHeaders(env),
     body: JSON.stringify({
       message: `Git-Files upload: ${file.name}`,
       content,
@@ -259,7 +278,7 @@ async function handleFileQuery(env, params, corsHeaders) {
 // 删除数据库记录
 async function handleDeleteRecord(id, env, corsHeaders, request) {
   if (request.method !== 'DELETE') {
-    return jsonResponse({ error: '不支持的方式' }, 405, corsHeaders);
+    return jsonResponse({ error: '不支持的请求方式' }, 405, corsHeaders);
   }
 
   try {
@@ -272,8 +291,7 @@ async function handleDeleteRecord(id, env, corsHeaders, request) {
       : jsonResponse({ error: '数据库更新失败' }, 500, corsHeaders);
   } catch (err) {
     return jsonResponse({
-      error: `Delete failed: ${err.message}`,
-      ...(env.ENVIRONMENT === 'development' && { stack: err.stack })
+      error: `Delete failed: ${err.message}`
     }, 500, corsHeaders);
   }
 }
@@ -699,6 +717,7 @@ const listHTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="apiToken" content="api_token">
   <title>文件管理</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>" type="image/svg+xml">
   <link href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
@@ -916,10 +935,13 @@ const listHTML = `<!DOCTYPE html>
     // 分页状态
     let currentPage = 1;
     const itemsPerPage = 20;
+    const apiToken = document.querySelector('meta[name="apiToken"]').content;
 
     async function loadPaginatedFiles(page) {
       try {
-        const response = await fetch(\`/api/qry?page=\${page}\`);
+        const response = await fetch(\`/api/qry?page=\${page}\`, {
+          headers: {  'Authorization': \`Bearer \${apiToken}\` }
+        });
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
           throw new Error(errorData.error || 'Network response was not ok');
@@ -1008,7 +1030,10 @@ const listHTML = `<!DOCTYPE html>
       if (!confirm(\`确定要删除 \${ids.length} 条记录吗？\`)) return;
       try {
         const results = await Promise.allSettled(
-          ids.map(id => fetch(\`/api/rec/$\{id}\`, { method: 'DELETE' }))
+          ids.map(id => fetch(\`/api/rec/\${id}\`, {
+            method: 'DELETE',
+            headers: {  'Authorization': \`Bearer \${apiToken}\` }
+          }))
         );
         
         const failedDeletes = results.filter(r => !r.value || !r.value.ok);
