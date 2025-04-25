@@ -15,53 +15,6 @@ const corsHeaders = (headers = {}) => ({
   ...headers
 });
 
-// API鉴权函数
-function authRequest(request, env) {
-  if (request.method === 'OPTIONS') return true;
-  const { pathname } = new URL(request.url);
-  if (pathname === '/' || pathname === '/list') return true;
-  
-  // 验证API_TOKEN
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader) return false;
-  const token = authHeader.replace('Bearer ', '').trim();
-  return token === env.API_TOKEN;
-}
-
-export default {
-  async fetch(request, env) {
-    if (!authRequest(request, env)) {
-      return jsonResponse({ error: '未经授权的访问' }, 401, corsHeaders());
-    } // 鉴权检查
-
-    const { pathname, searchParams } = new URL(request.url);
-    if (request.method === 'OPTIONS') return new Response(null, { headers: corsHeaders() });
-    
-    await initializeDatabase(env.GH_DB);
-    
-    const apiToken = env.API_TOKEN || 'auto';
-    const routes = {
-      '/': () => htmlResponse(HTML, corsHeaders()),
-      '/list': () => {
-        const listHTMLWithToken = listHTML.replace(
-          '<meta name="apiToken" content="api_token">',
-          `<meta name="apiToken" content="${apiToken}">`
-        );
-        return htmlResponse(listHTMLWithToken, corsHeaders());
-      },
-      '/api/upload': () => handleUpload(request, env, corsHeaders),
-      '/api/qry': () => handleFileQuery(env, searchParams, corsHeaders),
-      '/api/rec/(\\d+)': (req, id) => handleDeleteRecord(id, env, corsHeaders, req)
-    };
-
-    for (const [path, handler] of Object.entries(routes)) {
-      const match = pathname.match(new RegExp(`^${path}$`));
-      if (match) return await handler(request, ...match.slice(1));
-    }
-    return jsonResponse({ error: '不存在' }, 404, corsHeaders);
-  }
-};
-
 // ========== 初始化数据库 ==========
 async function initializeDatabase(db) {
   try {
@@ -87,8 +40,111 @@ async function initializeDatabase(db) {
   }
 }
 
+// Github API 请求头
+function getGitHubHeaders(env) {
+  return {
+    'Authorization': `token ${env.GH_TOKEN}`,
+    'Accept': 'application/vnd.github.v3+json',
+    'Content-Type': 'application/json',
+    'User-Agent': 'Cloudflare-Worker-Github',
+  };
+}
+
+function cleanPath(path) {
+  return (path || '').replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+}
+
+// 编码函数
+function encodeBase64(str) {
+  return btoa(unescape(encodeURIComponent(str)));
+}
+
+// 拼接直链地址
+async function buildDirectUrl(uploadType, username, idORrepo, branch, path, filename, env, event) {
+  const filePath = path ? `${cleanPath(path)}/${filename}` : filename;
+  if (uploadType === 'gist') {
+    return `https://gist.githubusercontent.com/${username}/${idORrepo}/raw/${filename}`;
+  } else {
+    const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event);
+    if (isPrivate && env.RAW_DOMAIN) {
+      return `https://${env.RAW_DOMAIN}/${username}/${idORrepo}/${branch}/${filePath}`;
+    }
+    return `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`;
+  }
+}
+// 检查仓库是否为私有（带缓存）
+async function checkRepoIsPrivate(username, repo, env, event) {
+  const cacheKey = new Request(`https://github-cache.example.com/repo_privacy/${username}/${repo}`);
+  // 尝试从缓存获取
+  const cache = caches.default;
+  let cachedResponse = await cache.match(cacheKey);
+  
+  if (cachedResponse) {
+    try {
+      const cachedData = await cachedResponse.json();
+      return cachedData.private;
+    } catch (e) {
+      console.log('缓存解析失败，重新获取');
+    }
+  }
+  
+  try {
+    const response = await fetch(`https://api.github.com/repos/${username}/${repo}`, {
+      headers: getGitHubHeaders(env)
+    });
+    
+    if (!response.ok) {
+      console.error(`检查仓库状态失败: ${response.status}`);
+      return false; // 默认按公开仓库处理
+    }
+    
+    const repoData = await response.json();
+    const isPrivate = repoData.private === true;
+    // 将结果缓存1小时（3600秒）
+    const cacheResponse = new Response(JSON.stringify(repoData), {
+      headers: {
+        'Cache-Control': 'max-age=3600',
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    // 使用waitUntil确保缓存操作不影响主流程
+    if (event) {
+      event.waitUntil(cache.put(cacheKey, cacheResponse));
+    } else {
+      await cache.put(cacheKey, cacheResponse);
+    }
+    
+    return isPrivate;
+  } catch (error) {
+    console.error('检查仓库隐私状态出错:', error);
+    return false; // 出错时默认按公开仓库处理
+  }
+}
+
+export default {
+  async fetch(request, env, event) {
+    const { pathname, searchParams } = new URL(request.url);    
+    await initializeDatabase(env.GH_DB);
+    const routes = {
+      '/': () => htmlResponse(HTML, corsHeaders()),
+      '/list': () => htmlResponse(listHTML, corsHeaders()),
+      '/api/upload': () => handleUpload(request, env, corsHeaders(), event),
+      '/api/qry': () => handleFileQuery(env, searchParams, corsHeaders()),
+      '/api/rec/(\\d+)': (req, id) => handleDeleteRecord(id, env, corsHeaders(), req)
+    };
+
+    for (const [path, handler] of Object.entries(routes)) {
+      const match = pathname.match(new RegExp(`^${path}$`));
+      if (match) return await handler(request, ...match.slice(1));
+    }
+    return jsonResponse({ error: '不存在' }, 404, corsHeaders());
+  }
+};
+
+
 // ========== 上传请求 ==========
-async function handleUpload(request, env, corsHeaders) {
+async function handleUpload(request, env, corsHeaders, event) {
   if (request.method !== 'POST') {
     return jsonResponse({ error: '不支持该请求方式' }, 405, corsHeaders);
   }
@@ -100,7 +156,7 @@ async function handleUpload(request, env, corsHeaders) {
 
     const results = await Promise.all(
       files.map(async file => {
-        const fileData = await processSingleFile(file, formData, env);
+        const fileData = await processSingleFile(file, formData, env, event);
         await saveToDatabase(fileData, env.GH_DB);
         return fileData;
       })
@@ -115,7 +171,7 @@ async function handleUpload(request, env, corsHeaders) {
 }
 
 // ========== 单文件处理 ==========
-async function processSingleFile(file, formData, env) {
+async function processSingleFile(file, formData, env, event) {
   const fileData = {
     filename: file.name,
     filesize: formatSize(file.size),
@@ -126,19 +182,12 @@ async function processSingleFile(file, formData, env) {
   if (fileData.upload_type === 'gist') {
     await processGist(file, formData, fileData, env);
   } else {
-    await processGitHub(file, formData, fileData, env);
+    await processGitHub(file, formData, fileData, env, event);
+  }
+  if (fileData.direct_url instanceof Promise) {
+    fileData.direct_url = await fileData.direct_url;
   }
   return fileData;
-}
-
-// Github API 请求头
-function getGitHubHeaders(env) {
-  return {
-    'Authorization': `token ${env.GH_TOKEN}`,
-    'Accept': 'application/vnd.github.v3+json',
-    'Content-Type': 'application/json',
-    'User-Agent': 'Cloudflare-Worker-Github',
-  };
 }
 
 // ========== Gist处理 ==========
@@ -170,16 +219,18 @@ async function processGist(file, formData, fileData, env) {
 }
 
 // ========== Github处理 ==========
-async function processGitHub(file, formData, fileData, env) {
+async function processGitHub(file, formData, fileData, env, event) {
   const username = formData.get('gh-username')?.trim();
   const repo = formData.get('gh-repo')?.trim();
   if (!username || !repo) throw new Error('需要 GitHub 用户名和仓库名');
  
-  const branch = formData.get('gh-branch')?.trim() || 'main';
-  const path = formData.get('gh-path')?.trim() || '/';
   const content = encodeBase64(await file.text());
-  const cleanPath = path.replace(/^\/+|\/+$/g, '');
-  const apiPath = cleanPath ? `${encodeURIComponent(cleanPath)}/${encodeURIComponent(file.name)}` : encodeURIComponent(file.name);
+  const branch = formData.get('gh-branch')?.trim() || 'main';
+  const rawPath = formData.get('gh-path')?.trim() || '/';
+  const cleanPathStr = cleanPath(rawPath);
+  const apiPath = cleanPathStr
+    ? `${encodeURIComponent(cleanPathStr)}/${encodeURIComponent(file.name)}`
+    : encodeURIComponent(file.name);
   const apiUrl = `https://api.github.com/repos/${username}/${repo}/contents/${apiPath}?ref=${branch}`;
 
   // 获取已有文件的SHA
@@ -213,22 +264,13 @@ async function processGitHub(file, formData, fileData, env) {
 
   if (!response.ok) throw new Error(`GitHub API 错误: ${await response.text()}`);
 
-  const cleanPathForUrl = cleanPath ? `${cleanPath}/` : '';
-  fileData.page_url = `https://github.com/${username}/${repo}/blob/${branch}/${cleanPathForUrl}${file.name}`;
-  fileData.direct_url = buildDirectUrl('github', username, repo, branch, cleanPath, file.name);
+  const pagePath = cleanPathStr ? `${cleanPathStr}/${file.name}` : file.name;
   fileData.github_username = username;
   fileData.github_repo = repo;
   fileData.github_branch = branch;
-  fileData.github_path = cleanPath;
-}
-
-// 拼接直链地址
-function buildDirectUrl(uploadType, username, idORrepo, branch, path, filename) {
-  const basePath = path ? `${path}/` : '';
-  const filePath = `${basePath}${filename}`.replace(/\/+/g, '/');
-  return uploadType === 'gist'
-    ? `https://gist.githubusercontent.com/${username}/${idORrepo}/raw/${filename}`
-    : `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`;
+  fileData.github_path = cleanPathStr;
+  fileData.page_url = `https://github.com/${username}/${repo}/blob/${branch}/${pagePath}`;
+  fileData.direct_url = await buildDirectUrl('github', username, repo, branch, cleanPathStr, file.name, env, event);
 }
 
 // 数据库操作
@@ -302,11 +344,6 @@ function formatSize(bytes) {
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
   return `${(bytes / 1073741824).toFixed(1)} GB`;
-}
-
-// 编码函数
-function encodeBase64(str) {
-  return btoa(unescape(encodeURIComponent(str)));
 }
 
 // 北京时间函数
@@ -717,7 +754,6 @@ const listHTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="apiToken" content="api_token">
   <title>文件管理</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>" type="image/svg+xml">
   <link href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
@@ -935,13 +971,9 @@ const listHTML = `<!DOCTYPE html>
     // 分页状态
     let currentPage = 1;
     const itemsPerPage = 20;
-    const apiToken = document.querySelector('meta[name="apiToken"]').content;
-
     async function loadPaginatedFiles(page) {
       try {
-        const response = await fetch(\`/api/qry?page=\${page}\`, {
-          headers: {  'Authorization': \`Bearer \${apiToken}\` }
-        });
+        const response = await fetch(\`/api/qry?page=\${page}\`);
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
           throw new Error(errorData.error || 'Network response was not ok');
@@ -1031,8 +1063,7 @@ const listHTML = `<!DOCTYPE html>
       try {
         const results = await Promise.allSettled(
           ids.map(id => fetch(\`/api/rec/\${id}\`, {
-            method: 'DELETE',
-            headers: {  'Authorization': \`Bearer \${apiToken}\` }
+            method: 'DELETE'
           }))
         );
         
