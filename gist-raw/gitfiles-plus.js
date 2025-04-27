@@ -28,7 +28,7 @@ async function initializeDatabase(db) {
       github_username TEXT,
       github_repo TEXT,
       github_branch TEXT DEFAULT 'main',
-      github_path TEXT DEFAULT '/',
+      github_path TEXT DEFAULT '/', 
       page_url TEXT,
       direct_url TEXT
     )
@@ -290,8 +290,8 @@ async function saveToDatabase(data, db) {
     gist_id ?? null,
     github_username ?? null,
     github_repo ?? null,
-    github_branch ?? undefined,
-    github_path ?? undefined,
+    github_branch || 'main',
+    github_path || '/',
     page_url || '',
     direct_url || ''
   ).run();
