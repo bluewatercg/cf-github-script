@@ -21,7 +21,7 @@ async function initializeDatabase(db) {
     CREATE TABLE IF NOT EXISTS git_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       filename TEXT NOT NULL, 
-      filesize INTEGER NOT NULL,
+      filesize TEXT NOT NULL,
       upload_type TEXT NOT NULL CHECK (upload_type IN ('gist', 'github')),
       upload_time DATETIME DEFAULT CURRENT_TIMESTAMP,
       gist_id TEXT,
@@ -290,8 +290,8 @@ async function saveToDatabase(data, db) {
     gist_id ?? null,
     github_username ?? null,
     github_repo ?? null,
-    github_branch ?? null,
-    github_path ?? null,
+    github_branch ?? undefined,
+    github_path ?? undefined,
     page_url || '',
     direct_url || ''
   ).run();
