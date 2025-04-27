@@ -51,6 +51,28 @@ function getGitHubHeaders(env) {
   };
 }
 
+// 获取GitHub文件sha
+async function getFileSHA(apiUrl, env) {
+  try {
+    const response = await fetch(apiUrl, { 
+      headers: getGitHubHeaders(env)
+    });
+
+    if (response.status === 401) throw new Error('Token 无效或权限不足');
+    if (response.status === 404) {
+      console.log('文件不存在，将创建新记录');
+      return null;
+    }  
+    if (!response.ok) return null;
+    
+    const data = await response.json();
+    return data.sha || null;  
+  } catch (error) {
+    console.error('SHA 获取失败:', error);
+    throw error;
+  }
+}
+
 function cleanPath(path) {
   return (path || '')
     .replace(/^\/+|\/+$/g, '')
@@ -175,7 +197,7 @@ async function processSingleFile(file, formData, env, event) {
     await processGitHub(file, formData, fileData, env, event);
   }
   if (fileData.direct_url instanceof Promise) {
-    fileData.direct_url = await fileData.direct_url;
+    fileData.direct_url = await fileData.direct_url; 
   }
   return fileData;
 }
@@ -224,23 +246,7 @@ async function processGitHub(file, formData, fileData, env, event) {
   const apiUrl = `https://api.github.com/repos/${username}/${repo}/contents/${apiPath}?ref=${branch}`;
 
   // 获取已有文件的SHA
-  let sha;
-  try {
-    const shaRes = await fetch(apiUrl, { 
-      headers: getGitHubHeaders(env)
-    });
-
-    if (shaRes.status === 401) throw new Error('Token 无效或权限不足');
-    if (shaRes.status === 404) console.log('文件不存在，将创建新记录');
-    if (shaRes.ok) {
-      const data = await shaRes.json();
-      sha = data.sha;
-    }
-  } catch (error) {
-    console.error('SHA 获取失败:', error);
-    throw error;
-  }
-
+  const sha = await getFileSHA(apiUrl, env);
   const response = await fetch(apiUrl, {
     method: 'PUT',
     headers: getGitHubHeaders(env),
@@ -251,8 +257,7 @@ async function processGitHub(file, formData, fileData, env, event) {
       ...(sha && { sha })
     }),
   });
-
-  if (!response.ok) throw new Error(`GitHub API 错误: ${await response.text()}`);
+  if (!response.ok) throw new Error(`GitHub API 错误: ${await response.text()}`); 
 
   const pagePath = cleanPathStr ? `${cleanPathStr}/${file.name}` : file.name;
   fileData.github_username = username;
