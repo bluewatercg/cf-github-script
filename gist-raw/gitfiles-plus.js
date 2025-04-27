@@ -10,7 +10,7 @@ const htmlResponse = (html, headers = {}) =>
 
 const corsHeaders = (headers = {}) => ({
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   ...headers
 });
@@ -20,7 +20,7 @@ async function initializeDatabase(db) {
   const table_schema = `
     CREATE TABLE IF NOT EXISTS git_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      filename TEXT NOT NULL,
+      filename TEXT NOT NULL, 
       filesize INTEGER NOT NULL,
       upload_type TEXT NOT NULL CHECK (upload_type IN ('gist', 'github')),
       upload_time DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -69,21 +69,21 @@ async function buildDirectUrl(uploadType, username, idORrepo, branch, path, file
   if (uploadType === 'gist') {
     return `https://gist.githubusercontent.com/${username}/${idORrepo}/raw/${filename}`;
   }
-  const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event);   
+  const isPrivate = await checkRepoIsPrivate(username, repo, env, event);   
   return isPrivate && env.RAW_DOMAIN
     ? `https://${env.RAW_DOMAIN}/${username}/${idORrepo}/${branch}/${filePath}`
     : `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`; 
 }
 
 // 检查仓库是否为私有（带缓存）
-async function checkRepoIsPrivate(username, idORrepo, env, event) { 
+async function checkRepoIsPrivate(username, repo, env, event) {  
   const cacheKey = new Request(`https://gitcache.example.com/repo_privacy/${username}/${repo}`); 
   const cache = caches.default;
   const cached = await cache.match(cacheKey); 
   
   if (cached) {
     try {
-      return (await cached.json()).private;
+      return (await cached.json()).private; 
     } catch (e) {
       console.log('缓存解析失败，重新获取');
     }
@@ -91,7 +91,7 @@ async function checkRepoIsPrivate(username, idORrepo, env, event) { 
   
   try {
     const response = await fetch(`https://api.github.com/repos/${username}/${repo}`, { 
-      headers: getGitHubHeaders(env)
+      headers: getGitHubHeaders(env) 
     });
     if (!response.ok) return false;
     
@@ -105,7 +105,7 @@ async function checkRepoIsPrivate(username, idORrepo, env, event) { 
     });
     
     // 使用waitUntil确保缓存操作不影响主流程
-    const cachePromise = cache.put(cacheKey, cacheResponse);
+    const cachePromise = cache.put(cacheKey, cacheResponse); 
     if (event) { event.waitUntil(cachePromise); }
     else { await cachePromise; }
     return isPrivate;
