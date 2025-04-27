@@ -79,7 +79,7 @@ async function buildDirectUrl(uploadType, username, idORrepo, branch, path, file
 async function checkRepoIsPrivate(username, repo, env, event) { 
   const cacheKey = new Request(`https://gitcache.example.com/repo_privacy/${username}/${repo}`); 
   const cache = caches.default;
-  const cached = await cache.match(cachekey);
+  const cached = await cache.match(cacheKey);
   
   if (cached) {
     try {
@@ -111,7 +111,7 @@ async function checkRepoIsPrivate(username, repo, env, event) { 
       await cache.put(cacheKey, cacheResponse);
     }
     return isPrivate;
-  } catch (error) { return false; }
+  } catch (error) { return false; } 
 }
 
 export default {
