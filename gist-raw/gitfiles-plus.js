@@ -1,4 +1,4 @@
-// 通用响应构造器
+// 通用响应器
 const jsonResponse = (data, status = 200, headers = {}) => 
   new Response(JSON.stringify(data), { 
     status, 
@@ -290,8 +290,8 @@ async function saveToDatabase(data, db) {
     gist_id ?? null,
     github_username ?? null,
     github_repo ?? null,
-    github_branch || 'main',
-    github_path || '/',
+    github_branch ?? null,
+    github_path ?? null,
     page_url || '',
     direct_url || ''
   ).run();
