@@ -76,10 +76,10 @@ async function buildDirectUrl(uploadType, username, idORrepo, branch, path, file
 }
 
 // 检查仓库是否为私有（带缓存）
-async function checkRepoIsPrivate(username, repo, env, event) { 
+async function checkRepoIsPrivate(username, idORrepo, env, event) { 
   const cacheKey = new Request(`https://gitcache.example.com/repo_privacy/${username}/${repo}`); 
   const cache = caches.default;
-  const cached = await cache.match(cacheKey);
+  const cached = await cache.match(cacheKey); 
   
   if (cached) {
     try {
@@ -105,13 +105,11 @@ async function checkRepoIsPrivate(username, repo, env, event) { 
     });
     
     // 使用waitUntil确保缓存操作不影响主流程
-    if (event) {
-      event.waitUntil(cache.put(cacheKey, cacheResponse));
-    } else {
-      await cache.put(cacheKey, cacheResponse);
-    }
+    const cachePromise = cache.put(cacheKey, cacheResponse);
+    if (event) { event.waitUntil(cachePromise); }
+    else { await cachePromise; }
     return isPrivate;
-  } catch (error) { return false; } 
+  } catch (error) { return false; }  
 }
 
 export default {
