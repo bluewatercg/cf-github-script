@@ -17,25 +17,26 @@ const corsHeaders = (headers = {}) => ({
 
 // ========== 初始化数据库 ==========
 async function initializeDatabase(db) {
+  const table_schema = `
+    CREATE TABLE IF NOT EXISTS git_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      filename TEXT NOT NULL,
+      filesize INTEGER NOT NULL,
+      upload_type TEXT NOT NULL CHECK (upload_type IN ('gist', 'github')),
+      upload_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+      gist_id TEXT,
+      github_username TEXT,
+      github_repo TEXT,
+      github_branch TEXT DEFAULT 'main',
+      github_path TEXT DEFAULT '/',
+      page_url TEXT,
+      direct_url TEXT
+    )
+  `;
   try {
-    await db.prepare(`
-      CREATE TABLE IF NOT EXISTS git_files (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        filename TEXT NOT NULL,
-        filesize INTEGER NOT NULL,
-        upload_type TEXT NOT NULL CHECK (upload_type IN ('gist', 'github')),
-        upload_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-        gist_id TEXT,
-        github_username TEXT,
-        github_repo TEXT,
-        github_branch TEXT DEFAULT 'main',
-        github_path TEXT DEFAULT '/',
-        page_url TEXT,
-        direct_url TEXT
-      )
-    `).run();
+    await db.prepare(table_schema).run();
   } catch (error) {
-    console.error('数据库初始化错误:', error);
+    console.error('数据库初始化失败:', error.message);
     throw error;
   }
 }
@@ -51,7 +52,9 @@ function getGitHubHeaders(env) {
 }
 
 function cleanPath(path) {
-  return (path || '').replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+  return (path || '')
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\/+/g, '/');
 }
 
 // 编码函数
@@ -62,49 +65,42 @@ function encodeBase64(str) {
 // 拼接直链地址
 async function buildDirectUrl(uploadType, username, idORrepo, branch, path, filename, env, event) {
   const filePath = path ? `${cleanPath(path)}/${filename}` : filename;
+  
   if (uploadType === 'gist') {
     return `https://gist.githubusercontent.com/${username}/${idORrepo}/raw/${filename}`;
-  } else {
-    const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event);
-    if (isPrivate && env.RAW_DOMAIN) {
-      return `https://${env.RAW_DOMAIN}/${username}/${idORrepo}/${branch}/${filePath}`;
-    }
-    return `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`;
   }
+  const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event);   
+  return isPrivate && env.RAW_DOMAIN
+    ? `https://${env.RAW_DOMAIN}/${username}/${idORrepo}/${branch}/${filePath}`
+    : `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`; 
 }
+
 // 检查仓库是否为私有（带缓存）
-async function checkRepoIsPrivate(username, repo, env, event) {
-  const cacheKey = new Request(`https://github-cache.example.com/repo_privacy/${username}/${repo}`);
-  // 尝试从缓存获取
+async function checkRepoIsPrivate(username, repo, env, event) { 
+  const cacheKey = new Request(`https://gitcache.example.com/repo_privacy/${username}/${repo}`); 
   const cache = caches.default;
-  let cachedResponse = await cache.match(cacheKey);
+  const cached = await cache.match(cachekey);
   
-  if (cachedResponse) {
+  if (cached) {
     try {
-      const cachedData = await cachedResponse.json();
-      return cachedData.private;
+      return (await cached.json()).private;
     } catch (e) {
       console.log('缓存解析失败，重新获取');
     }
   }
   
   try {
-    const response = await fetch(`https://api.github.com/repos/${username}/${repo}`, {
+    const response = await fetch(`https://api.github.com/repos/${username}/${repo}`, { 
       headers: getGitHubHeaders(env)
     });
+    if (!response.ok) return false;
     
-    if (!response.ok) {
-      console.error(`检查仓库状态失败: ${response.status}`);
-      return false; // 默认按公开仓库处理
-    }
-    
-    const repoData = await response.json();
-    const isPrivate = repoData.private === true;
-    // 将结果缓存1小时（3600秒）
+    const repoData = await response.json(); 
+    const isPrivate = repoData.private === true; 
     const cacheResponse = new Response(JSON.stringify(repoData), {
       headers: {
-        'Cache-Control': 'max-age=3600',
-        'Content-Type': 'application/json'
+        'Cache-Control': 'max-age=3600', // 将结果缓存1小时（3600秒）
+        'Content-Type': 'application/json' 
       }
     });
     
@@ -114,12 +110,8 @@ async function checkRepoIsPrivate(username, repo, env, event) {
     } else {
       await cache.put(cacheKey, cacheResponse);
     }
-    
     return isPrivate;
-  } catch (error) {
-    console.error('检查仓库隐私状态出错:', error);
-    return false; // 出错时默认按公开仓库处理
-  }
+  } catch (error) { return false; }
 }
 
 export default {
@@ -138,7 +130,7 @@ export default {
       const match = pathname.match(new RegExp(`^${path}$`));
       if (match) return await handler(request, ...match.slice(1));
     }
-    return jsonResponse({ error: '不存在' }, 404, corsHeaders());
+    return jsonResponse({ error: '不存在' }, 404, corsHeaders()); 
   }
 };
 
