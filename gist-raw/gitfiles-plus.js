@@ -69,7 +69,7 @@ async function buildDirectUrl(uploadType, username, idORrepo, branch, path, file
   if (uploadType === 'gist') {
     return `https://gist.githubusercontent.com/${username}/${idORrepo}/raw/${filename}`;
   }
-  const isPrivate = await checkRepoIsPrivate(username, repo, env, event);   
+  const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event);   
   return isPrivate && env.RAW_DOMAIN
     ? `https://${env.RAW_DOMAIN}/${username}/${idORrepo}/${branch}/${filePath}`
     : `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`; 
