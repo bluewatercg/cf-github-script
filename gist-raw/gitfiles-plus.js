@@ -1,4 +1,4 @@
-// 通用响应器
+// 通用响应构造器
 const jsonResponse = (data, status = 200, headers = {}) => 
   new Response(JSON.stringify(data), { 
     status, 
@@ -10,39 +10,13 @@ const htmlResponse = (html, headers = {}) =>
 
 const corsHeaders = (headers = {}) => ({
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   ...headers
 });
 
-// ========== 初始化数据库 ==========
-async function initializeDatabase(db) {
-  const table_schema = `
-    CREATE TABLE IF NOT EXISTS git_files (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      filename TEXT NOT NULL, 
-      filesize TEXT NOT NULL,
-      upload_type TEXT NOT NULL CHECK (upload_type IN ('gist', 'github')),
-      upload_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-      gist_id TEXT,
-      github_username TEXT,
-      github_repo TEXT,
-      github_branch TEXT DEFAULT 'main',
-      github_path TEXT DEFAULT '/', 
-      page_url TEXT,
-      direct_url TEXT
-    )
-  `;
-  try {
-    await db.prepare(table_schema).run();
-  } catch (error) {
-    console.error('数据库初始化失败:', error.message);
-    throw error;
-  }
-}
-
 // Github API 请求头
-function getGitHubHeaders(env) {
+function githubHeaders(env) {
   return {
     'Authorization': `token ${env.GH_TOKEN}`,
     'Accept': 'application/vnd.github.v3+json',
@@ -55,16 +29,14 @@ function getGitHubHeaders(env) {
 async function getFileSHA(apiUrl, env) {
   try {
     const response = await fetch(apiUrl, { 
-      headers: getGitHubHeaders(env)
+      headers: githubHeaders(env)
     });
-
-    if (response.status === 401) throw new Error('Token 无效或权限不足');
+    if (response.status === 401) throw new Error('Github Token 无效或权限不足');
     if (response.status === 404) {
       console.log('文件不存在，将创建新记录');
       return null;
     }  
     if (!response.ok) return null;
-    
     const data = await response.json();
     return data.sha || null;  
   } catch (error) {
@@ -73,6 +45,7 @@ async function getFileSHA(apiUrl, env) {
   }
 }
 
+// 清洗路径
 function cleanPath(path) {
   return (path || '')
     .replace(/^\/+|\/+$/g, '')
@@ -87,51 +60,72 @@ function encodeBase64(str) {
 // 拼接直链地址
 async function buildDirectUrl(uploadType, username, idORrepo, branch, path, filename, env, event) {
   const filePath = path ? `${cleanPath(path)}/${filename}` : filename;
-  
   if (uploadType === 'gist') {
     return `https://gist.githubusercontent.com/${username}/${idORrepo}/raw/${filename}`;
   }
-  const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event);   
+  const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event);
   return isPrivate && env.RAW_DOMAIN
     ? `https://${env.RAW_DOMAIN}/${username}/${idORrepo}/${branch}/${filePath}`
-    : `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`; 
+    : `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`;
 }
 
 // 检查仓库是否为私有（带缓存）
-async function checkRepoIsPrivate(username, repo, env, event) {  
-  const cacheKey = new Request(`https://gitcache.example.com/repo_privacy/${username}/${repo}`); 
-  const cache = caches.default;
-  const cached = await cache.match(cacheKey); 
-  
+async function checkRepoIsPrivate(username, repo, env, event) {
+  const cacheKey = new Request(`https://gitcache.example.com/repo_privacy/${username}/${repo}`);
+  const cache = caches.default; // 尝试从缓存获取
+  const cached = await cache.match(cacheKey);
   if (cached) {
     try {
-      return (await cached.json()).private; 
+      return (await cached.json()).private;
     } catch (e) {
       console.log('缓存解析失败，重新获取');
     }
   }
   
   try {
-    const response = await fetch(`https://api.github.com/repos/${username}/${repo}`, { 
-      headers: getGitHubHeaders(env) 
+    const response = await fetch(`https://api.github.com/repos/${username}/${repo}`, {
+      headers: githubHeaders(env)
     });
-    if (!response.ok) return false;
-    
-    const repoData = await response.json(); 
-    const isPrivate = repoData.private === true; 
+    if (!response.ok) return false; //按公开仓库处理
+    const repoData = await response.json();
+    const isPrivate = repoData.private === true;
     const cacheResponse = new Response(JSON.stringify(repoData), {
       headers: {
         'Cache-Control': 'max-age=3600', // 将结果缓存1小时（3600秒）
-        'Content-Type': 'application/json' 
+        'Content-Type': 'application/json'
       }
     });
-    
     // 使用waitUntil确保缓存操作不影响主流程
     const cachePromise = cache.put(cacheKey, cacheResponse); 
     if (event) { event.waitUntil(cachePromise); }
     else { await cachePromise; }
     return isPrivate;
-  } catch (error) { return false; }  
+  } catch (error) { return false; } //出错时按公开仓库处理
+}
+
+// 初始化数据库
+async function initializeDatabase(db) {
+  try {
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS git_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filename TEXT NOT NULL,
+        filesize TEXT NOT NULL,
+        upload_type TEXT NOT NULL CHECK (upload_type IN ('gist', 'github')),
+        upload_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+        gist_id TEXT,
+        gh_user TEXT,
+        gh_repo TEXT,
+        gh_branch TEXT DEFAULT 'main',
+        gh_path TEXT DEFAULT '/',
+        page_url TEXT,
+        direct_url TEXT
+      )
+    `).run();
+  } catch (error) {
+    console.error('数据库初始化错误:', error);
+    throw error;
+  }
 }
 
 export default {
@@ -150,10 +144,9 @@ export default {
       const match = pathname.match(new RegExp(`^${path}$`));
       if (match) return await handler(request, ...match.slice(1));
     }
-    return jsonResponse({ error: '不存在' }, 404, corsHeaders()); 
+    return jsonResponse({ error: '不存在' }, 404, corsHeaders());
   }
 };
-
 
 // ========== 上传请求 ==========
 async function handleUpload(request, env, corsHeaders, event) {
@@ -165,7 +158,6 @@ async function handleUpload(request, env, corsHeaders, event) {
     const formData = await request.formData();
     const files = formData.getAll('files');
     if (!files.length) return jsonResponse({ error: '未选择任何文件' }, 400, corsHeaders);
-
     const results = await Promise.all(
       files.map(async file => {
         const fileData = await processSingleFile(file, formData, env, event);
@@ -197,7 +189,7 @@ async function processSingleFile(file, formData, env, event) {
     await processGitHub(file, formData, fileData, env, event);
   }
   if (fileData.direct_url instanceof Promise) {
-    fileData.direct_url = await fileData.direct_url; 
+    fileData.direct_url = await fileData.direct_url;
   }
   return fileData;
 }
@@ -213,7 +205,7 @@ async function processGist(file, formData, fileData, env) {
 
   const response = await fetch(gistUrl, {
     method: existingGistId ? 'PATCH' : 'POST',
-    headers: getGitHubHeaders(env),
+    headers: githubHeaders(env),
     body: JSON.stringify({
       public: isPublic,
       files: { [file.name]: { content } }
@@ -232,7 +224,7 @@ async function processGist(file, formData, fileData, env) {
 
 // ========== Github处理 ==========
 async function processGitHub(file, formData, fileData, env, event) {
-  const username = formData.get('gh-username')?.trim();
+  const username = formData.get('gh-user')?.trim();
   const repo = formData.get('gh-repo')?.trim();
   if (!username || !repo) throw new Error('需要 GitHub 用户名和仓库名');
  
@@ -245,11 +237,11 @@ async function processGitHub(file, formData, fileData, env, event) {
     : encodeURIComponent(file.name);
   const apiUrl = `https://api.github.com/repos/${username}/${repo}/contents/${apiPath}?ref=${branch}`;
 
-  // 获取已有文件的SHA
+  // 获取已有文件的SHA并更新
   const sha = await getFileSHA(apiUrl, env);
   const response = await fetch(apiUrl, {
     method: 'PUT',
-    headers: getGitHubHeaders(env),
+    headers: githubHeaders(env),
     body: JSON.stringify({
       message: `Git-Files upload: ${file.name}`,
       content,
@@ -257,13 +249,13 @@ async function processGitHub(file, formData, fileData, env, event) {
       ...(sha && { sha })
     }),
   });
-  if (!response.ok) throw new Error(`GitHub API 错误: ${await response.text()}`); 
+  if (!response.ok) throw new Error(`GitHub API 错误: ${await response.text()}`);
 
   const pagePath = cleanPathStr ? `${cleanPathStr}/${file.name}` : file.name;
-  fileData.github_username = username;
-  fileData.github_repo = repo;
-  fileData.github_branch = branch;
-  fileData.github_path = cleanPathStr;
+  fileData.gh_user = username;
+  fileData.gh_repo = repo;
+  fileData.gh_branch = branch;
+  fileData.gh_path = cleanPathStr;
   fileData.page_url = `https://github.com/${username}/${repo}/blob/${branch}/${pagePath}`;
   fileData.direct_url = await buildDirectUrl('github', username, repo, branch, cleanPathStr, file.name, env, event);
 }
@@ -272,15 +264,15 @@ async function processGitHub(file, formData, fileData, env, event) {
 async function saveToDatabase(data, db) {
   const { 
     filename, filesize, upload_type, upload_time,
-    gist_id, github_username, github_repo,
-    github_branch, github_path, page_url, direct_url 
+    gist_id, gh_user, gh_repo,
+    gh_branch, gh_path, page_url, direct_url 
   } = data;
 
   await db.prepare(`
     INSERT INTO git_files (
       filename, filesize, upload_type, upload_time,
-      gist_id, github_username, github_repo,
-      github_branch, github_path, page_url, direct_url
+      gist_id, gh_user, gh_repo,
+      gh_branch, gh_path, page_url, direct_url
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     filename || '',
@@ -288,10 +280,10 @@ async function saveToDatabase(data, db) {
     upload_type || '',
     upload_time || '',
     gist_id ?? null,
-    github_username ?? null,
-    github_repo ?? null,
-    github_branch || 'main',
-    github_path || '/',
+    gh_user ?? null,
+    gh_repo ?? null,
+    gh_branch || 'main',
+    gh_path || '/',
     page_url || '',
     direct_url || ''
   ).run();
@@ -308,7 +300,6 @@ async function handleFileQuery(env, params, corsHeaders) {
     ORDER BY upload_time DESC
     LIMIT ? OFFSET ?
   `).bind(limit, (page - 1) * limit).all();
-  
   return jsonResponse(result.results || result.rows || [], 200, corsHeaders);
 }
 
@@ -322,7 +313,6 @@ async function handleDeleteRecord(id, env, corsHeaders, request) {
     const result = await env.GH_DB.prepare(`
       DELETE FROM git_files WHERE id = ?
     `).bind(id).run();
-
     return result.success
       ? jsonResponse({ success: true, id }, 200, corsHeaders)
       : jsonResponse({ error: '数据库更新失败' }, 500, corsHeaders);
@@ -355,13 +345,23 @@ function bjTime(timestamp) {
   });
 }
 
+function escapeHtml(unsafe) {
+  if (!unsafe) return '';
+  return unsafe.toString()
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 // HTML版权页
 function copyright() {
   return `
     <p class="mb-0">
       <span class="item">Copyright © 2025 Yutian81</span>
       <span class="separator mx-2">|</span>
-      <a href="https://github.com/yutian81/slink/" class="item text-blue-600 hover:text-blue-800" target="_blank">
+      <a href="https://github.com/yutian81/cf-github-script/tree/main/gist-raw" class="item text-blue-600 hover:text-blue-800" target="_blank">
         <i class="fab fa-github me-1"></i> GitHub
       </a>
       <span class="separator mx-2">|</span>
@@ -522,7 +522,7 @@ const HTML = `<!DOCTYPE html>
       <!-- GitHub 选项 -->
       <div id="github-options" class="mt-4 hidden">
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div><label class="form-label">用户名*</label><input type="text" id="gh-username" class="form-input" required placeholder="必须"></div>
+          <div><label class="form-label">用户名*</label><input type="text" id="gh-user" class="form-input" required placeholder="必须"></div>
           <div><label class="form-label">仓库名*</label><input type="text" id="gh-repo" class="form-input" required placeholder="必须"></div>
           <div><label class="form-label">分支</label><input type="text" id="gh-branch" class="form-input" placeholder="main"></div>
           <div><label class="form-label">路径</label><input type="text" id="gh-path" class="form-input" placeholder="/"></div>
@@ -659,7 +659,7 @@ const HTML = `<!DOCTYPE html>
         formData.append('gist-public', gistVisibility === 'public' ? 'on' : 'off');
         formData.append('existing-gist', document.getElementById('existing-gist').value);
       } else {
-        formData.append('gh-username', document.getElementById('gh-username').value);
+        formData.append('gh-user', document.getElementById('gh-user').value);
         formData.append('gh-repo', document.getElementById('gh-repo').value);
         formData.append('gh-branch', document.getElementById('gh-branch').value || 'main');
         formData.append('gh-path', document.getElementById('gh-path').value || '/');
@@ -712,18 +712,9 @@ const HTML = `<!DOCTYPE html>
       }
     });
 
-    function escapeHtml(unsafe) {
-      if (!unsafe) return '';
-      return unsafe.toString()
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-    }
-
     function showUploadResults(results) {
       const bjTime = ${bjTime.toString()};
+      const escapeHtml = ${escapeHtml.toString()};
       resultBody.innerHTML = results.map(result => \`
         <tr>
           <td class="px-4 py-2">\${escapeHtml(result.filename)}</td>
@@ -991,17 +982,18 @@ const listHTML = `<!DOCTYPE html>
 
     function renderFiles(files) {
       const bjTime = ${bjTime.toString()};
+      const escapeHtml = ${escapeHtml.toString()};
       const tbody = document.getElementById('file-table-body');
       tbody.innerHTML = files.map((file, index) => \`
         <tr>
           <td><input type="checkbox" class="form-checkbox" data-id="\${file.id}"></td>
           <td>\${index + 1}(\${file.id})</td>
-          <td>\${file.filename}</td>
-          <td>\${file.filesize}</td>
+          <td>\${escapeHtml(file.filename)}</td>
+          <td>\${escapeHtml(file.filesize)}</td>
           <td>\${file.upload_type === 'github' ? 'GitHub' : 'Gist'}</td>
           <td>\${bjTime(file.upload_time)}</td>
-          <td><a href="\${file.page_url}" target="_blank" class="text-link">查看</a></td>
-          <td><a href="\${file.direct_url}" target="_blank" class="text-link">查看</a></td>
+          <td><a href="\${escapeHtml(file.page_url)}" target="_blank" class="text-link">查看</a></td>
+          <td><a href="\${escapeHtml(file.direct_url)}" target="_blank" class="text-link">查看</a></td>
         </tr>
       \`).join('');
     }
