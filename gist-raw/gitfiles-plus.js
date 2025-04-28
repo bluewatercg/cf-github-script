@@ -149,6 +149,7 @@ export default {
 };
 
 // ========== 上传请求 ==========
+// ========== 上传请求 ==========
 async function handleUpload(request, env, corsHeaders, event) {
   if (request.method !== 'POST') {
     return jsonResponse({ error: '不支持该请求方式' }, 405, corsHeaders);
@@ -158,14 +159,22 @@ async function handleUpload(request, env, corsHeaders, event) {
     const formData = await request.formData();
     const files = formData.getAll('files');
     if (!files.length) return jsonResponse({ error: '未选择任何文件' }, 400, corsHeaders);
-    const results = await Promise.all(
-      files.map(async file => {
+    
+    const results = [];
+    for (const file of files) {
+      try {
         const fileData = await processFile(file, formData, env, event);
         await saveToDatabase(fileData, env.GH_DB);
-        return fileData;
-      })
-    );
-
+        results.push(fileData);
+      } catch (err) {
+        results.push({
+          filename: file.name,
+          error: err.message
+        });
+      }
+      // 添加短暂间隔避免GitHub API速率限制
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
     return jsonResponse(results, 201, corsHeaders);
   } catch (err) {
     return jsonResponse({ 
