@@ -160,7 +160,7 @@ async function handleUpload(request, env, corsHeaders, event) {
     if (!files.length) return jsonResponse({ error: '未选择任何文件' }, 400, corsHeaders);
     const results = await Promise.all(
       files.map(async file => {
-        const fileData = await processSingleFile(file, formData, env, event);
+        const fileData = await processFile(file, formData, env, event);
         await saveToDatabase(fileData, env.GH_DB);
         return fileData;
       })
@@ -175,7 +175,7 @@ async function handleUpload(request, env, corsHeaders, event) {
 }
 
 // ========== 单文件处理 ==========
-async function processSingleFile(file, formData, env, event) {
+async function processFile(file, formData, env, event) {
   const fileData = {
     filename: file.name,
     filesize: formatSize(file.size),
@@ -268,25 +268,59 @@ async function saveToDatabase(data, db) {
     gh_branch, gh_path, page_url, direct_url 
   } = data;
 
-  await db.prepare(`
-    INSERT INTO git_files (
-      filename, filesize, upload_type, upload_time,
-      gist_id, gh_user, gh_repo,
-      gh_branch, gh_path, page_url, direct_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    filename || '',
-    filesize || '',
-    upload_type || '',
-    upload_time || '',
-    gist_id ?? null,
-    gh_user ?? null,
-    gh_repo ?? null,
-    gh_branch || 'main',
-    gh_path || '/',
-    page_url || '',
-    direct_url || ''
-  ).run();
+  let existingId;
+
+  // 检查是否存在重复记录
+  if (upload_type === 'gist') {
+    const existing = await db.prepare(
+      'SELECT id FROM git_files WHERE upload_type = ? AND gist_id = ? AND filename = ?'
+    ).bind(upload_type, gist_id, filename).first();
+    existingId = existing?.id;
+  } else if (upload_type === 'github') {
+    const existing = await db.prepare(
+      'SELECT id FROM git_files WHERE upload_type = ? AND gh_user = ? AND gh_repo = ? AND gh_branch = ? AND gh_path = ? AND filename = ?'
+    ).bind(upload_type, gh_user, gh_repo, gh_branch, gh_path, filename).first();
+    existingId = existing?.id;
+  }
+
+  if (existingId) {
+    // 更新现有记录
+    await db.prepare(`
+      UPDATE git_files 
+      SET filesize = ?, 
+          upload_time = ?, 
+          page_url = ?, 
+          direct_url = ?
+      WHERE id = ?
+    `).bind(
+      filesize,
+      upload_time,
+      page_url,
+      direct_url,
+      existingId
+    ).run();
+  } else {
+    // 插入新记录（注意 gh_path 不再强制设置默认值 '/')
+    await db.prepare(`
+      INSERT INTO git_files (
+        filename, filesize, upload_type, upload_time,
+        gist_id, gh_user, gh_repo,
+        gh_branch, gh_path, page_url, direct_url
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      filename || '',
+      filesize || '',
+      upload_type || '',
+      upload_time || '',
+      gist_id ?? null,
+      gh_user ?? null,
+      gh_repo ?? null,
+      gh_branch || 'main',
+      gh_path || '',
+      page_url || '',
+      direct_url || ''
+    ).run();
+  }
 }
 
 // 文件查询
