@@ -25,12 +25,21 @@ function githubHeaders(env) {
   };
 }
 
+// Github速率限制检查
+function checkRateLimit(headers) {
+  const remaining = parseInt(headers.get('x-ratelimit-remaining'));
+  if (remaining < 10) {
+    console.warn(`GitHub API 剩余调用次数: ${remaining}`);
+  }
+}
+
 // 获取GitHub文件sha
 async function getFileSHA(apiUrl, env) {
   try {
     const response = await fetch(apiUrl, { 
       headers: githubHeaders(env)
     });
+    checkRateLimit(response.headers);
     if (response.status === 401) throw new Error('Github Token 无效或权限不足');
     if (response.status === 404) {
       console.log('文件不存在，将创建新记录');
@@ -43,6 +52,14 @@ async function getFileSHA(apiUrl, env) {
     console.error('SHA 获取失败:', error);
     throw error;
   }
+}
+
+// 检查Gist是否存在
+async function checkGistExists(gistId, env) {
+  const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+    headers: githubHeaders(env)
+  });
+  return res.status === 200;
 }
 
 // 清洗路径
@@ -137,7 +154,8 @@ export default {
       '/list': () => htmlResponse(listHTML, corsHeaders()),
       '/api/upload': () => handleUpload(request, env, corsHeaders(), event),
       '/api/qry': () => handleFileQuery(env, searchParams, corsHeaders()),
-      '/api/rec/(\\d+)': (req, id) => handleDeleteRecord(id, env, corsHeaders(), req)
+      '/api/rec/(\\d+)': (req, id) => handleDeleteRecord(id, env, corsHeaders(), req),
+      '/api/del/(\\d+)': (req, id) => handleDeleteFile(id, env, corsHeaders(), req)
     };
 
     for (const [path, handler] of Object.entries(routes)) {
@@ -148,8 +166,7 @@ export default {
   }
 };
 
-// ========== 上传请求 ==========
-// ========== 上传请求 ==========
+// 上传请求
 async function handleUpload(request, env, corsHeaders, event) {
   if (request.method !== 'POST') {
     return jsonResponse({ error: '不支持该请求方式' }, 405, corsHeaders);
@@ -366,6 +383,99 @@ async function handleDeleteRecord(id, env, corsHeaders, request) {
   }
 }
 
+async function handleDeleteFile(id, env, corsHeaders, request) {
+  if (request.method !== 'DELETE') {
+    return jsonResponse({ error: '不支持的请求方式' }, 405, corsHeaders);
+  }
+
+  try {
+    // 获取数据库记录
+    const record = await env.GH_DB.prepare(
+      'SELECT * FROM git_files WHERE id = ?'
+    ).bind(id).first();
+    
+    if (!record) return jsonResponse({ error: '记录不存在' }, 404, corsHeaders);
+
+    // 删除实际文件
+    if (record.upload_type === 'gist') {
+      await deleteGistFile(record, env);
+      const gistExists = await checkGistExists(record.gist_id, env);
+      if (!gistExists) {
+        await env.GH_DB.prepare(
+          'DELETE FROM git_files WHERE gist_id = ?'
+        ).bind(record.gist_id).run();
+      }
+    } else if (record.upload_type === 'github') {
+      await deleteGitHubFile(record, env);
+    }
+
+    // 删除数据库记录
+    await env.GH_DB.prepare(
+      'DELETE FROM git_files WHERE id = ?'
+    ).bind(id).run();
+
+    return jsonResponse({ success: true, id }, 200, corsHeaders);
+  } catch (error) {
+    return jsonResponse({ error: `删除失败: ${error.message}` }, 500, corsHeaders);
+  }
+}
+
+// GitHub文件删除逻辑
+async function deleteGitHubFile(record, env) {
+  const { gh_user, gh_repo, gh_branch, gh_path, filename } = record;
+  const cleanedPath = cleanPath(gh_path || '');
+  const pathParts = cleanedPath.split('/').filter(p => p).map(p => encodeURIComponent(p));
+  const fullPath = [...pathParts, encodeURIComponent(filename)].join('/');
+  
+  const apiUrl = `https://api.github.com/repos/${gh_user}/${gh_repo}/contents/${fullPath}?ref=${gh_branch}`;
+  const sha = await getFileSHA(apiUrl, env);
+  
+  if (!sha) throw new Error('文件不存在于GitHub');
+  
+  const response = await fetch(apiUrl, {
+    method: 'DELETE',
+    headers: githubHeaders(env),
+    body: JSON.stringify({
+      message: `删除文件: ${filename}`,
+      sha,
+      branch: gh_branch
+    })
+  });
+  checkRateLimit(response.headers);
+  if (!response.ok) throw new Error(`GitHub API错误: ${await response.text()}`);
+}
+
+// Gist文件删除逻辑
+async function deleteGistFile(record, env) {
+  const { gist_id, filename } = record;
+  const gistUrl = `https://api.github.com/gists/${gist_id}`;
+  
+  // 获取Gist完整数据
+  const res = await fetch(gistUrl, { headers: githubHeaders(env) });
+  if (!res.ok) throw new Error(`获取Gist失败: ${await res.text()}`);
+  const gistData = await res.json();
+  const files = Object.keys(gistData.files);
+  
+  if (files.length === 1) {
+    // 当仅剩一个文件时删除整个Gist
+    const deleteRes = await fetch(gistUrl, {
+      method: 'DELETE',
+      headers: githubHeaders(env)
+    });
+    if (!deleteRes.ok) throw new Error(`删除Gist失败: ${await deleteRes.text()}`);
+  } else {
+    // 多个文件时仅删除指定文件
+    const updateRes = await fetch(gistUrl, {
+      method: 'PATCH',
+      headers: githubHeaders(env),
+      body: JSON.stringify({
+        files: { [filename]: null }
+      })
+    });
+    if (!updateRes.ok) throw new Error(`更新Gist失败: ${await updateRes.text()}`);
+  }
+}
+
 // 格式化文件大小
 function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -541,7 +651,7 @@ const HTML = `<!DOCTYPE html>
             <span id="progress-percent">0%</span>
           </div>
           <div id="progress-bar" class="h-2 bg-gray-200 rounded-full">
-            <div id="progress" class="h-full bg-blue-500 rounded-full" style="width: 0%"></div>
+            <div id="progress" class="h-full bg-blue-500 rounded-full transition-all duration-300" style="width: 0%"></div>
           </div>
         </div>
       </div>
@@ -715,15 +825,27 @@ const HTML = `<!DOCTYPE html>
         progressContainer.classList.remove('hidden');
         progressPercent.textContent = '0%';
         document.getElementById('progress').style.width = '0%';
-
         const xhr = new XMLHttpRequest();
+
         xhr.open('POST', '/api/upload', true);
-        
+        // 计算总文件大小
+        const totalSize = Array.from(files).reduce((sum, file) => sum + file.size, 0);
+        const formatSize = (bytes) => {
+          if (bytes < 1024) return bytes + ' B';
+          if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+          if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+          return (bytes / 1073741824).toFixed(1) + ' GB';
+        };
+
         xhr.upload.onprogress = function(e) {
           if (e.lengthComputable) {
-            const percentComplete = Math.round((e.loaded * 100) / e.total);
-            document.getElementById('progress').style.width = percentComplete + '%';
-            progressPercent.textContent = percentComplete + '%';
+            const percent = Math.round((e.loaded * 100) / e.total);
+            const loadedSize = formatSize(e.loaded);
+            const totalSize = formatSize(e.total);
+            document.getElementById('progress').style.width = \`\${percent}%\`;
+            progressPercent.textContent = \`\${percent}%\`;
+            document.getElementById('progress-size').textContent = 
+              \`\${loadedSize} / \${totalSize}\`;
           }
         };
         
@@ -860,7 +982,7 @@ const listHTML = `<!DOCTYPE html>
       .left-buttons, 
       .right-buttons {
         display: flex;
-        gap: 0.5rem;
+        gap: 0.6rem;
       }
       
       /* 表单元素样式 */
@@ -960,9 +1082,22 @@ const listHTML = `<!DOCTYPE html>
           <button id="delete-records" class="action-btn action-btn-red">
             <i class="fas fa-trash-alt mr-2"></i>删除记录
           </button>
+          <button id="delete-files" class="action-btn action-btn-red">
+            <i class="fas fa-trash-alt mr-2"></i>删除文件
+          </button>
           <button id="copy-urls" class="action-btn action-btn-blue">
             <i class="fas fa-copy mr-2"></i>复制直链
           </button>
+        </div>
+      </div>
+
+      <div id="delete-progress-container" class="hidden mt-4">
+        <div class="flex justify-between text-sm text-gray-600 mb-1">
+          <span>正在删除</span>
+          <span id="delete-progress-percent">0%</span>
+        </div>
+        <div class="h-2 bg-gray-200 rounded-full">
+          <div id="delete-progress" class="h-full bg-red-500 rounded-full transition-all duration-300" style="width: 0%"></div>
         </div>
       </div>
 
@@ -1109,17 +1244,63 @@ const listHTML = `<!DOCTYPE html>
       }
     });
 
+    // 批量删除文件
+    document.getElementById('delete-files').addEventListener('click', async function() {
+      const ids = getSelectedIds();
+      if (!ids.length) return alert('请选择要删除的文件');
+      if (!confirm(\`即将永久删除 \${ids.length} 个文件（云端文件也会删除），确定继续？\`)) return;
+      const deleteProgress = document.getElementById('delete-progress');
+      const deleteProgressPercent = document.getElementById('delete-progress-percent');
+      const deleteProgressContainer = document.getElementById('delete-progress-container');
+      const deleteBtn = this;
+      
+      try {
+        // 初始化进度条
+        deleteBtn.disabled = true;
+        deleteProgressContainer.classList.remove('hidden');
+        deleteProgress.style.width = '0%';
+        deleteProgressPercent.textContent = '0%';
+        const total = ids.length;
+        let completed = 0;
+        for (const id of ids) {
+          try {
+            const response = await fetch(\`/api/del/\${id}\`, { method: 'DELETE' });
+            if (!response.ok) throw new Error(await response.text());
+            // 更新进度
+            completed++;
+            const percent = Math.round((completed / total) * 100);
+            deleteProgress.style.width = \`\${percent}%\`;
+            deleteProgressPercent.textContent = \`\${percent}%\`;
+            // 添加延迟避免速率限制
+            await new Promise(r => setTimeout(r, 500));
+          } catch (error) {
+            console.error(\`删除文件 \${id} 失败:\`, error);
+          }
+        }
+        const successCount = completed;
+        if (successCount === total) {
+          alert('删除成功！');
+        } else {
+          alert(\`成功删除 \${successCount} 个文件，\${total - successCount} 个失败\`);
+        }
+        loadPaginatedFiles(currentPage);
+      } catch (error) {
+        alert(\`删除失败: \${error.message}\`);
+      } finally {
+        deleteBtn.disabled = false;
+        deleteProgressContainer.classList.add('hidden');
+      }
+    });
+
     // 批量复制直链
     document.getElementById('copy-urls').addEventListener('click', function() {
       const selectedCheckboxes = document.querySelectorAll('.form-checkbox:checked');
       const urls = [];
-      
       selectedCheckboxes.forEach(checkbox => {
         const row = checkbox.closest('tr');
         const directUrl = row.querySelector('td:nth-child(8) a').href;
         urls.push(directUrl);
       });
-      
       if (urls.length === 0) return alert('请选择要复制的文件');
       navigator.clipboard.writeText(urls.join('\\n'));
       alert(\`已复制 \${urls.length} 个直链\`);
