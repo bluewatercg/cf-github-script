@@ -16,9 +16,11 @@ const corsHeaders = (headers = {}) => ({
 });
 
 // Github API 请求头
-function githubHeaders(env) {
+function githubHeaders(env, requestHeaders) {
+  const authHeader = requestHeaders.get('Authorization');
+  const token = authHeader ? authHeader.replace('Bearer ', '') : env.GH_TOKEN;
   return {
-    'Authorization': `token ${env.GH_TOKEN}`,
+    'Authorization': `token ${token}`,  // 优先使用请求头的 Token
     'Accept': 'application/vnd.github.v3+json',
     'Content-Type': 'application/json',
     'User-Agent': 'Cloudflare-Worker-Github',
@@ -34,10 +36,10 @@ function checkRateLimit(headers) {
 }
 
 // 获取GitHub文件sha
-async function getFileSHA(apiUrl, env) {
+async function getFileSHA(apiUrl, env, request) {
   try {
     const response = await fetch(apiUrl, { 
-      headers: githubHeaders(env)
+      headers: githubHeaders(env, request.headers)
     });
     checkRateLimit(response.headers);
     if (response.status === 401) throw new Error('Github Token 无效或权限不足');
@@ -55,9 +57,9 @@ async function getFileSHA(apiUrl, env) {
 }
 
 // 检查Gist是否存在
-async function checkGistExists(gistId, env) {
+async function checkGistExists(gistId, env, request) {
   const res = await fetch(`https://api.github.com/gists/${gistId}`, {
-    headers: githubHeaders(env)
+    headers: githubHeaders(env, request.headers)
   });
   return res.status === 200;
 }
@@ -75,19 +77,19 @@ function encodeBase64(str) {
 }
 
 // 拼接直链地址
-async function buildDirectUrl(uploadType, username, idORrepo, branch, path, filename, env, event) {
+async function buildDirectUrl(uploadType, username, idORrepo, branch, path, filename, env, event, request) {
   const filePath = path ? `${cleanPath(path)}/${filename}` : filename;
   if (uploadType === 'gist') {
     return `https://gist.githubusercontent.com/${username}/${idORrepo}/raw/${filename}`;
   }
-  const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event);
+  const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event, request);
   return isPrivate && env.RAW_DOMAIN
     ? `https://${env.RAW_DOMAIN}/${username}/${idORrepo}/${branch}/${filePath}`
     : `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`;
 }
 
 // 检查仓库是否为私有（带缓存）
-async function checkRepoIsPrivate(username, repo, env, event) {
+async function checkRepoIsPrivate(username, repo, env, event, request) {
   const cacheKey = new Request(`https://gitcache.example.com/repo_privacy/${username}/${repo}`);
   const cache = caches.default; // 尝试从缓存获取
   const cached = await cache.match(cacheKey);
@@ -101,7 +103,7 @@ async function checkRepoIsPrivate(username, repo, env, event) {
   
   try {
     const response = await fetch(`https://api.github.com/repos/${username}/${repo}`, {
-      headers: githubHeaders(env)
+      headers: githubHeaders(env, request.headers)
     });
     if (!response.ok) return false; //按公开仓库处理
     const repoData = await response.json();
@@ -152,10 +154,10 @@ export default {
     const routes = {
       '/': () => htmlResponse(HTML, corsHeaders()),
       '/list': () => htmlResponse(listHTML, corsHeaders()),
-      '/api/upload': () => handleUpload(request, env, corsHeaders(), event),
-      '/api/qry': () => handleFileQuery(env, searchParams, corsHeaders()),
-      '/api/rec/(\\d+(?:,\\d+)*)': (req, ids) => handleDeleteRecord(ids, env, corsHeaders(), req),
-      '/api/del/(\\d+(?:,\\d+)*)': (req, ids) => handleDeleteFile(ids, env, corsHeaders(), req)
+      '/api/upload': () => handleUpload(request, env, event),
+      '/api/qry': () => handleFileQuery(env, searchParams),
+      '/api/rec/(\\d+(?:,\\d+)*)': (req, ids) => handleDeleteRecord(ids, env, req),
+      '/api/del/(\\d+(?:,\\d+)*)': (req, ids) => handleDeleteFile(ids, env, req)
     };
 
     for (const [path, handler] of Object.entries(routes)) {
@@ -167,20 +169,21 @@ export default {
 };
 
 // 上传请求
-async function handleUpload(request, env, corsHeaders, event) {
+async function handleUpload(request, env, event) {
+  const corsHeader = corsHeaders();
   if (request.method !== 'POST') {
-    return jsonResponse({ error: '不支持该请求方式' }, 405, corsHeaders);
+    return jsonResponse({ error: '不支持该请求方式' }, 405, corsHeader);
   }
 
   try {
     const formData = await request.formData();
     const files = formData.getAll('files');
-    if (!files.length) return jsonResponse({ error: '未选择任何文件' }, 400, corsHeaders);
+    if (!files.length) return jsonResponse({ error: '未选择任何文件' }, 400, corsHeader);
     
     const results = [];
     for (const file of files) {
       try {
-        const fileData = await processFile(file, formData, env, event);
+        const fileData = await processFile(file, formData, env, event, request);
         await saveToDatabase(fileData, env.GH_DB);
         results.push(fileData);
       } catch (err) {
@@ -192,16 +195,16 @@ async function handleUpload(request, env, corsHeaders, event) {
       // 添加短暂间隔避免GitHub API速率限制
       await new Promise(resolve => setTimeout(resolve, 800));
     }
-    return jsonResponse(results, 201, corsHeaders);
+    return jsonResponse(results, 201, corsHeader);
   } catch (err) {
     return jsonResponse({ 
       error: err.message
-    }, 500, corsHeaders);
+    }, 500, corsHeader);
   }
 }
 
 // ========== 单文件处理 ==========
-async function processFile(file, formData, env, event) {
+async function processFile(file, formData, env, event, request) {
   const fileData = {
     filename: file.name,
     filesize: formatSize(file.size),
@@ -210,9 +213,9 @@ async function processFile(file, formData, env, event) {
   };
 
   if (fileData.upload_type === 'gist') {
-    await processGist(file, formData, fileData, env);
+    await processGist(file, formData, fileData, env, event, request);
   } else {
-    await processGitHub(file, formData, fileData, env, event);
+    await processGitHub(file, formData, fileData, env, event, request);
   }
   if (fileData.direct_url instanceof Promise) {
     fileData.direct_url = await fileData.direct_url;
@@ -221,7 +224,7 @@ async function processFile(file, formData, env, event) {
 }
 
 // ========== Gist处理 ==========
-async function processGist(file, formData, fileData, env) {
+async function processGist(file, formData, fileData, env, event, request) {
   const isPublic = formData.get('gist-public') === 'on';
   const existingGistId = formData.get('existing-gist')?.trim();
   const content = await file.text();
@@ -231,7 +234,7 @@ async function processGist(file, formData, fileData, env) {
 
   const response = await fetch(gistUrl, {
     method: existingGistId ? 'PATCH' : 'POST',
-    headers: githubHeaders(env),
+    headers: githubHeaders(env, request.headers),
     body: JSON.stringify({
       public: isPublic,
       files: { [file.name]: { content } }
@@ -244,12 +247,12 @@ async function processGist(file, formData, fileData, env) {
   if (!gist.owner?.login) throw new Error('Gist 缺少用户名信息');
 
   fileData.page_url = gist.html_url;
-  fileData.direct_url = buildDirectUrl('gist', gist.owner.login, gist.id, '', '', file.name);
+  fileData.direct_url = buildDirectUrl('gist', gist.owner.login, gist.id, '', '', file.name, env, event, request);
   fileData.gist_id = gist.id;
 }
 
 // ========== Github处理 ==========
-async function processGitHub(file, formData, fileData, env, event) {
+async function processGitHub(file, formData, fileData, env, event, request) {
   const username = formData.get('gh-user')?.trim();
   const repo = formData.get('gh-repo')?.trim();
   if (!username || !repo) throw new Error('需要 GitHub 用户名和仓库名');
@@ -264,10 +267,10 @@ async function processGitHub(file, formData, fileData, env, event) {
   const apiUrl = `https://api.github.com/repos/${username}/${repo}/contents/${apiPath}?ref=${branch}`;
 
   // 获取已有文件的SHA并更新
-  const sha = await getFileSHA(apiUrl, env);
+  const sha = await getFileSHA(apiUrl, env, request);
   const response = await fetch(apiUrl, {
     method: 'PUT',
-    headers: githubHeaders(env),
+    headers: githubHeaders(env, request.headers),
     body: JSON.stringify({
       message: `Git-Files upload: ${file.name}`,
       content,
@@ -283,7 +286,7 @@ async function processGitHub(file, formData, fileData, env, event) {
   fileData.gh_branch = branch;
   fileData.gh_path = cleanPathStr;
   fileData.page_url = `https://github.com/${username}/${repo}/blob/${branch}/${pagePath}`;
-  fileData.direct_url = await buildDirectUrl('github', username, repo, branch, cleanPathStr, file.name, env, event);
+  fileData.direct_url = await buildDirectUrl('github', username, repo, branch, cleanPathStr, file.name, env, event, request);
 }
 
 // 数据库操作
@@ -350,7 +353,8 @@ async function saveToDatabase(data, db) {
 }
 
 // 文件查询
-async function handleFileQuery(env, params, corsHeaders) {
+async function handleFileQuery(env, params) {
+  const corsHeader = corsHeaders();
   const page = parseInt(params.get('page')) || 1;
   const limit = 20;
   const result = await env.GH_DB.prepare(`
@@ -360,103 +364,132 @@ async function handleFileQuery(env, params, corsHeaders) {
     ORDER BY upload_time DESC
     LIMIT ? OFFSET ?
   `).bind(limit, (page - 1) * limit).all();
-  return jsonResponse(result.results || result.rows || [], 200, corsHeaders);
+  return jsonResponse(result.results || result.rows || [], 200, corsHeader);
 }
 
-// 删除数据库记录
-async function handleDeleteRecord(idsParam, env, corsHeaders, request) {
+// ========== 通用删除操作处理器 ==========
+async function handleDeleteOperation(idsParam, env, request, operationType, processRecordCallback) {
+  const corsHeader = corsHeaders();
   if (request.method !== 'DELETE') {
-    return jsonResponse({ error: '不支持的请求方式' }, 405, corsHeaders);
+    return jsonResponse({ error: '不支持的请求方式' }, 405, corsHeader);
   }
 
-  const ids = idsParam.split(',').map(id => parseInt(id)).filter(id => !isNaN(id));
-  if (!ids.length) return jsonResponse({ error: '无效ID参数' }, 400, corsHeaders);
-
-  try {
-    const results = await Promise.all(
-      ids.map(id => env.GH_DB.prepare(`DELETE FROM git_files WHERE id = ?`).bind(id).run())
-    );
-    const successCount = results.filter(r => r.success).length;
-    return jsonResponse({ 
-      success: true, 
-      deletedCount: successCount,
-      total: ids.length 
-    }, 200, corsHeaders);
-  } catch (err) {
-    return jsonResponse({ error: `删除失败: ${err.message}` }, 500, corsHeaders);
-  }
-}
-
-// 删除文件+数据库记录
-async function handleDeleteFile(idsParam, env, corsHeaders, request) {
-  if (request.method !== 'DELETE') {
-    return jsonResponse({ error: '不支持的请求方式' }, 405, corsHeaders);
-  }
-
-  const ids = idsParam.split(',').map(id => parseInt(id)).filter(id => !isNaN(id));
-  if (!ids.length) return jsonResponse({ error: '无效ID参数' }, 400, corsHeaders);
+  // 解析并验证ID参数
+  const ids = idsParam.split(',')
+    .map(id => parseInt(id))
+    .filter(id => !isNaN(id));
+  if (!ids.length) return jsonResponse({ error: '无效ID参数' }, 400, corsHeader);
 
   try {
     const results = [];
     for (const id of ids) {
       try {
+        // 查询数据库记录（公共逻辑）
         const record = await env.GH_DB.prepare(
           'SELECT * FROM git_files WHERE id = ?'
         ).bind(id).first();
-        
-        if (!record) {
-          results.push({ id, status: '记录不存在', success: false });
-          continue;
-        }
 
-        if (record.upload_type === 'gist') {
-          await deleteGistFile(record, env);
-          const gistExists = await checkGistExists(record.gist_id, env);
-          if (!gistExists) {
-            await env.GH_DB.prepare(
-              'DELETE FROM git_files WHERE gist_id = ?'
-            ).bind(record.gist_id).run();
-          }
-        } else if (record.upload_type === 'github') {
-          await deleteGitHubFile(record, env);
-        }
-
-        await env.GH_DB.prepare(
-          'DELETE FROM git_files WHERE id = ?'
-        ).bind(id).run();
-        results.push({ id, status: '成功', success: true });
+        // 调用回调函数处理具体逻辑
+        const result = await processRecordCallback(id, record, env, request);
+        results.push(result);
       } catch (error) {
-        results.push({ id, status: `失败: ${error.message}`, success: false });
+        results.push({
+          id,
+          success: false,
+          filename: record?.filename || null,
+          upload_type: record?.upload_type || null,
+          error: error.message
+        });
       }
-      await new Promise(r => setTimeout(r, 800)); // 防止速率限制
+      await new Promise(r => setTimeout(r, 800)); // 速率限制（公共逻辑）
     }
 
-    const successCount = results.filter(r => r.success).length;
-    return jsonResponse({ 
-      results,
-      successCount,
-      total: ids.length 
-    }, 200, corsHeaders);
-  } catch (error) {
-    return jsonResponse({ error: `删除失败: ${error.message}` }, 500, corsHeaders);
+    // 统一响应格式（公共逻辑）
+    return jsonResponse({
+      operation: operationType,
+      total: ids.length,
+      success_count: results.filter(r => r.success).length,
+      failed_count: results.filter(r => !r.success).length,
+      results
+    }, 200, corsHeader);
+  } catch (err) {
+    return jsonResponse({ error: `操作失败: ${err.message}` }, 500, corsHeader);
   }
 }
 
+// 删除数据库记录
+async function handleDeleteRecord(idsParam, env, request) {
+  return handleDeleteOperation(
+    idsParam, env, request, '删除记录',
+    async (id, record) => {
+      if (!record) {
+        return { id, success: false, error: '记录不存在' };
+      }
+      // 具体删除逻辑
+      const result = await env.GH_DB.prepare(
+        'DELETE FROM git_files WHERE id = ?'
+      ).bind(id).run();
+      return {
+        id,
+        success: result.success,
+        filename: record.filename,
+        upload_type: record.upload_type,
+        error: result.success ? null : '数据库删除失败'
+      };
+    }
+  );
+}
+
+// 删除文件+数据库记录
+async function handleDeleteFile(idsParam, env, request) {
+  return handleDeleteOperation(
+    idsParam, env, request, '删除文件',
+    async (id, record, env, request) => {
+      if (!record) {
+        return { id, success: false, error: '记录不存在' };
+      }
+      if (record.upload_type === 'gist') {
+        await deleteGistFile(record, env, request);
+        const gistExists = await checkGistExists(record.gist_id, env, request);
+        if (!gistExists) {
+          await env.GH_DB.prepare(
+            'DELETE FROM git_files WHERE gist_id = ?'
+          ).bind(record.gist_id).run();
+        }
+      } else if (record.upload_type === 'github') {
+        await deleteGitHubFile(record, env, request);
+      }
+
+      // 删除数据库记录
+      await env.GH_DB.prepare(
+        'DELETE FROM git_files WHERE id = ?'
+      ).bind(id).run();
+
+      return {
+        id,
+        success: true,
+        filename: record.filename,
+        upload_type: record.upload_type
+      };
+    }
+  );
+}
+
 // GitHub文件删除逻辑
-async function deleteGitHubFile(record, env) {
+async function deleteGitHubFile(record, env, request) {
   const { gh_user, gh_repo, gh_branch, gh_path, filename } = record;
   const cleanedPath = cleanPath(gh_path || '');
   const pathParts = cleanedPath.split('/').filter(p => p).map(p => encodeURIComponent(p));
   const fullPath = [...pathParts, encodeURIComponent(filename)].join('/');
   
   const apiUrl = `https://api.github.com/repos/${gh_user}/${gh_repo}/contents/${fullPath}?ref=${gh_branch}`;
-  const sha = await getFileSHA(apiUrl, env);
+  const sha = await getFileSHA(apiUrl, env, request);
   
   if (!sha) throw new Error('文件不存在于GitHub');
   
   const response = await fetch(apiUrl, {
     method: 'DELETE',
-    headers: githubHeaders(env),
+    headers: githubHeaders(env, request.headers),
     body: JSON.stringify({
       message: `删除文件: ${filename}`,
       sha,
@@ -468,12 +501,12 @@ async function deleteGitHubFile(record, env) {
 }
 
 // Gist文件删除逻辑
-async function deleteGistFile(record, env) {
+async function deleteGistFile(record, env, request) {
   const { gist_id, filename } = record;
   const gistUrl = `https://api.github.com/gists/${gist_id}`;
   
   // 获取Gist完整数据
-  const res = await fetch(gistUrl, { headers: githubHeaders(env) });
+  const res = await fetch(gistUrl, { headers: githubHeaders(env, request.headers) });
   if (!res.ok) throw new Error(`获取Gist失败: ${await res.text()}`);
   const gistData = await res.json();
   const files = Object.keys(gistData.files);
@@ -482,14 +515,14 @@ async function deleteGistFile(record, env) {
     // 当仅剩一个文件时删除整个Gist
     const deleteRes = await fetch(gistUrl, {
       method: 'DELETE',
-      headers: githubHeaders(env)
+      headers: githubHeaders(env, request.headers)
     });
     if (!deleteRes.ok) throw new Error(`删除Gist失败: ${await deleteRes.text()}`);
   } else {
     // 多个文件时仅删除指定文件
     const updateRes = await fetch(gistUrl, {
       method: 'PATCH',
-      headers: githubHeaders(env),
+      headers: githubHeaders(env, request.headers),
       body: JSON.stringify({
         files: { [filename]: null }
       })
@@ -1224,6 +1257,8 @@ const listHTML = `<!DOCTYPE html>
           <td><a href="\${escapeHtml(file.direct_url)}" target="_blank" class="text-link">查看</a></td>
         </tr>
       \`).join('');
+      bindCheckboxEvents();
+      updateHeaderCheckbox();
     }
 
     // 初始化加载第一页
@@ -1249,26 +1284,52 @@ const listHTML = `<!DOCTYPE html>
     });
 
     // 全选/反选
-    document.getElementById('select-all-check').addEventListener('change', function(e) {
-      const checkboxes = document.querySelectorAll('.form-checkbox');
-      checkboxes.forEach(checkbox => checkbox.checked = e.target.checked);
-    });
+    function updateHeaderCheckbox() {
+        const dataCheckboxes = document.querySelectorAll('.form-checkbox[data-id]');
+        const headerCheckbox = document.getElementById('select-all-check');
+        
+        // 计算选中状态
+        const checkedCount = Array.from(dataCheckboxes).filter(cb => cb.checked).length;
+        const allChecked = checkedCount === dataCheckboxes.length && dataCheckboxes.length > 0;
+        const someChecked = checkedCount > 0 && !allChecked;
 
-    document.getElementById('select-all').addEventListener('click', function() {
-      const checkboxes = document.querySelectorAll('.form-checkbox');
-      checkboxes.forEach(checkbox => checkbox.checked = true);
-    });
-
-    document.getElementById('select-reverse').addEventListener('click', function() {
-      const checkboxes = document.querySelectorAll('.form-checkbox');
-      checkboxes.forEach(checkbox => checkbox.checked = !checkbox.checked);
-    });
-
-    function getSelectedIds() {
-      return Array.from(document.querySelectorAll('.form-checkbox:checked'))
-        .map(checkbox => checkbox.dataset.id)
-        .filter(id => id);
+        // 更新表头复选框状态
+        headerCheckbox.checked = allChecked;
+        headerCheckbox.indeterminate = someChecked;  // 中间状态
     }
+
+    // 表头复选框事件
+    document.getElementById('select-all-check').addEventListener('change', function(e) {
+        const checkboxes = document.querySelectorAll('.form-checkbox[data-id]');
+        checkboxes.forEach(checkbox => checkbox.checked = e.target.checked);
+    });
+
+    // 全选功能（仅数据行）
+    document.getElementById('select-all').addEventListener('click', function() {
+        const checkboxes = document.querySelectorAll('.form-checkbox[data-id]');
+        checkboxes.forEach(checkbox => checkbox.checked = true);
+        updateHeaderCheckbox();
+    });
+
+    // 反选功能（仅数据行）
+    document.getElementById('select-reverse').addEventListener('click', function() {
+        const checkboxes = document.querySelectorAll('.form-checkbox[data-id]');
+        checkboxes.forEach(checkbox => checkbox.checked = !checkbox.checked);
+        updateHeaderCheckbox();
+    });
+
+    // 初始化时绑定数据行复选框事件
+    function bindCheckboxEvents() {
+        document.querySelectorAll('.form-checkbox[data-id]').forEach(checkbox => {
+            checkbox.addEventListener('change', updateHeaderCheckbox);
+        });
+    }
+
+  function getSelectedIds() {
+    return Array.from(document.querySelectorAll('.form-checkbox[data-id]:checked'))
+      .map(checkbox => checkbox.dataset.id)
+      .filter(id => id && !isNaN(id));
+  }
 
     // 删除记录（带进度条）
     document.getElementById('delete-records').addEventListener('click', async function () {
@@ -1290,7 +1351,7 @@ const listHTML = `<!DOCTYPE html>
         try {
           const res = await fetch(\`/api/rec/\${id}\`, { method: 'DELETE' });
           const result = await res.json();
-          if (res.ok && result.deletedCount > 0) successCount++;
+          if (res.ok && result.success_count > 0) successCount++;
         } catch (err) {
           console.error(\`删除记录失败 [ID: \${id}]\`, err);
         }
@@ -1332,7 +1393,7 @@ const listHTML = `<!DOCTYPE html>
         try {
           const res = await fetch(\`/api/del/\${id}\`, { method: 'DELETE' });
           const result = await res.json();
-          if (res.ok && result.successCount > 0) successCount++;
+          if (res.ok && result.success_count > 0) successCount++;
         } catch (err) {
           console.error(\`删除失败 [ID: \${id}]\`, err);
         }
