@@ -154,8 +154,8 @@ export default {
       '/list': () => htmlResponse(listHTML, corsHeaders()),
       '/api/upload': () => handleUpload(request, env, corsHeaders(), event),
       '/api/qry': () => handleFileQuery(env, searchParams, corsHeaders()),
-      '/api/rec/(\\d+)': (req, id) => handleDeleteRecord(id, env, corsHeaders(), req),
-      '/api/del/(\\d+)': (req, id) => handleDeleteFile(id, env, corsHeaders(), req)
+      '/api/rec/(\\d+(?:,\\d+)*)': (req, ids) => handleDeleteRecord(ids, env, corsHeaders(), req),
+      '/api/del/(\\d+(?:,\\d+)*)': (req, ids) => handleDeleteFile(ids, env, corsHeaders(), req)
     };
 
     for (const [path, handler] of Object.entries(routes)) {
@@ -190,7 +190,7 @@ async function handleUpload(request, env, corsHeaders, event) {
         });
       }
       // 添加短暂间隔避免GitHub API速率限制
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 800));
     }
     return jsonResponse(results, 201, corsHeaders);
   } catch (err) {
@@ -341,7 +341,7 @@ async function saveToDatabase(data, db) {
       gist_id ?? null,
       gh_user ?? null,
       gh_repo ?? null,
-      gh_branch || 'main',
+      gh_branch || '',
       gh_path || '',
       page_url || '',
       direct_url || ''
@@ -364,57 +364,79 @@ async function handleFileQuery(env, params, corsHeaders) {
 }
 
 // 删除数据库记录
-async function handleDeleteRecord(id, env, corsHeaders, request) {
+async function handleDeleteRecord(idsParam, env, corsHeaders, request) {
   if (request.method !== 'DELETE') {
     return jsonResponse({ error: '不支持的请求方式' }, 405, corsHeaders);
   }
 
+  const ids = idsParam.split(',').map(id => parseInt(id)).filter(id => !isNaN(id));
+  if (!ids.length) return jsonResponse({ error: '无效ID参数' }, 400, corsHeaders);
+
   try {
-    const result = await env.GH_DB.prepare(`
-      DELETE FROM git_files WHERE id = ?
-    `).bind(id).run();
-    return result.success
-      ? jsonResponse({ success: true, id }, 200, corsHeaders)
-      : jsonResponse({ error: '数据库更新失败' }, 500, corsHeaders);
+    const results = await Promise.all(
+      ids.map(id => env.GH_DB.prepare(`DELETE FROM git_files WHERE id = ?`).bind(id).run())
+    );
+    const successCount = results.filter(r => r.success).length;
+    return jsonResponse({ 
+      success: true, 
+      deletedCount: successCount,
+      total: ids.length 
+    }, 200, corsHeaders);
   } catch (err) {
-    return jsonResponse({
-      error: `Delete failed: ${err.message}`
-    }, 500, corsHeaders);
+    return jsonResponse({ error: `删除失败: ${err.message}` }, 500, corsHeaders);
   }
 }
 
-async function handleDeleteFile(id, env, corsHeaders, request) {
+// 删除文件+数据库记录
+async function handleDeleteFile(idsParam, env, corsHeaders, request) {
   if (request.method !== 'DELETE') {
     return jsonResponse({ error: '不支持的请求方式' }, 405, corsHeaders);
   }
 
-  try {
-    // 获取数据库记录
-    const record = await env.GH_DB.prepare(
-      'SELECT * FROM git_files WHERE id = ?'
-    ).bind(id).first();
-    
-    if (!record) return jsonResponse({ error: '记录不存在' }, 404, corsHeaders);
+  const ids = idsParam.split(',').map(id => parseInt(id)).filter(id => !isNaN(id));
+  if (!ids.length) return jsonResponse({ error: '无效ID参数' }, 400, corsHeaders);
 
-    // 删除实际文件
-    if (record.upload_type === 'gist') {
-      await deleteGistFile(record, env);
-      const gistExists = await checkGistExists(record.gist_id, env);
-      if (!gistExists) {
+  try {
+    const results = [];
+    for (const id of ids) {
+      try {
+        const record = await env.GH_DB.prepare(
+          'SELECT * FROM git_files WHERE id = ?'
+        ).bind(id).first();
+        
+        if (!record) {
+          results.push({ id, status: '记录不存在', success: false });
+          continue;
+        }
+
+        if (record.upload_type === 'gist') {
+          await deleteGistFile(record, env);
+          const gistExists = await checkGistExists(record.gist_id, env);
+          if (!gistExists) {
+            await env.GH_DB.prepare(
+              'DELETE FROM git_files WHERE gist_id = ?'
+            ).bind(record.gist_id).run();
+          }
+        } else if (record.upload_type === 'github') {
+          await deleteGitHubFile(record, env);
+        }
+
         await env.GH_DB.prepare(
-          'DELETE FROM git_files WHERE gist_id = ?'
-        ).bind(record.gist_id).run();
+          'DELETE FROM git_files WHERE id = ?'
+        ).bind(id).run();
+        results.push({ id, status: '成功', success: true });
+      } catch (error) {
+        results.push({ id, status: `失败: ${error.message}`, success: false });
       }
-    } else if (record.upload_type === 'github') {
-      await deleteGitHubFile(record, env);
+      await new Promise(r => setTimeout(r, 800)); // 防止速率限制
     }
 
-    // 删除数据库记录
-    await env.GH_DB.prepare(
-      'DELETE FROM git_files WHERE id = ?'
-    ).bind(id).run();
-
-    return jsonResponse({ success: true, id }, 200, corsHeaders);
+    const successCount = results.filter(r => r.success).length;
+    return jsonResponse({ 
+      results,
+      successCount,
+      total: ids.length 
+    }, 200, corsHeaders);
   } catch (error) {
     return jsonResponse({ error: `删除失败: ${error.message}` }, 500, corsHeaders);
   }
@@ -508,6 +530,16 @@ function escapeHtml(unsafe) {
     .replace(/'/g, "&#039;");
 }
 
+function headLinks() {
+  return `
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>" type="image/svg+xml">
+    <link href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  `;
+}
+
 // HTML版权页
 function copyright() {
   return `
@@ -529,12 +561,8 @@ function copyright() {
 const HTML = `<!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GitHub 文件服务器</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>" type="image/svg+xml">
-  <link href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  ${headLinks()}
   <style>
     .dropzone {
       border: 2px dashed #e5e7eb;
@@ -826,9 +854,9 @@ const HTML = `<!DOCTYPE html>
         progressPercent.textContent = '0%';
         document.getElementById('progress').style.width = '0%';
         const xhr = new XMLHttpRequest();
-
+        
+        await new Promise(resolve => requestAnimationFrame(resolve));
         xhr.open('POST', '/api/upload', true);
-        // 计算总文件大小
         const totalSize = Array.from(files).reduce((sum, file) => sum + file.size, 0);
         const formatSize = (bytes) => {
           if (bytes < 1024) return bytes + ' B';
@@ -839,34 +867,52 @@ const HTML = `<!DOCTYPE html>
 
         xhr.upload.onprogress = function(e) {
           if (e.lengthComputable) {
-            const percent = Math.round((e.loaded * 100) / e.total);
-            const loadedSize = formatSize(e.loaded);
-            const totalSize = formatSize(e.total);
-            document.getElementById('progress').style.width = \`\${percent}%\`;
-            progressPercent.textContent = \`\${percent}%\`;
-            document.getElementById('progress-size').textContent = 
-              \`\${loadedSize} / \${totalSize}\`;
+            requestAnimationFrame(() => {
+              const percent = Math.min(99, Math.round((e.loaded * 100) / e.total));
+              const loadedSize = formatSize(e.loaded);
+              const totalSize = formatSize(e.total);
+              document.getElementById('progress').style.width = \`\${percent}%\`;
+              progressPercent.textContent = \`\${percent}%\`;
+              document.getElementById('progress-size').textContent = 
+                \`\${loadedSize} / \${totalSize}\`;
+            });
           }
         };
         
         xhr.onload = function() {
-          if (xhr.status === 201) {
-            const results = JSON.parse(xhr.response);
-            showUploadResults(results);
-            fileInput.value = '';
-            selectedFiles.classList.add('hidden');
-          } else {
-            let errMsg = '上传失败';
-            try {
-              const res = JSON.parse(xhr.response);
-              errMsg += res.error ? (': ' + res.error) : '';
-            } catch {}
-            alert(errMsg);
-          }
+          requestAnimationFrame(() => {
+            document.getElementById('progress').style.width = '100%';
+            progressPercent.textContent = '100%';
+            document.getElementById('progress-size').textContent = '上传完成';
+          });
+          setTimeout(() => {
+            progressContainer.classList.add('hidden');
+            if (xhr.status === 201) {
+              const results = JSON.parse(xhr.response);
+              showUploadResults(results);
+              fileInput.value = '';
+              selectedFiles.classList.add('hidden');
+            } else {
+              let errMsg = '上传失败';
+              try {
+                const res = JSON.parse(xhr.response);
+                errMsg += res.error ? (': ' + res.error) : '';
+              } catch {}
+              alert(errMsg);
+            }
+          }, 800); // 保持800ms完成状态
         };
         
         xhr.onerror = function() {
-          throw new Error('网络错误');
+          requestAnimationFrame(() => {
+            document.getElementById('progress').style.width = '100%';
+            progressPercent.textContent = '100%';
+            document.getElementById('progress-size').textContent = '网络错误';
+          });
+          setTimeout(() => {
+            progressContainer.classList.add('hidden');
+            alert('网络连接异常');
+          }, 800);
         };
         xhr.send(formData);
       } catch (error) {
@@ -877,6 +923,7 @@ const HTML = `<!DOCTYPE html>
       }
     });
 
+    // 显示上传结果
     function showUploadResults(results) {
       const bjTime = ${bjTime.toString()};
       const escapeHtml = ${escapeHtml.toString()};
@@ -900,15 +947,12 @@ const HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+// ========== 列表页模板 ==========
 const listHTML = `<!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>文件管理</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>" type="image/svg+xml">
-  <link href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <title>文件管理</title>  
+  ${headLinks()}
   <style>
       body { 
         background-color: #f3f4f6; 
@@ -1036,6 +1080,12 @@ const listHTML = `<!DOCTYPE html>
         color: #2563eb;
         text-decoration: underline;
       }
+      .cursor-not-allowed {
+        cursor: not-allowed;
+      }
+      .opacity-75 {
+        opacity: 0.75;
+      }
 
       /* 响应式调整 */
       @media (max-width: 768px) {
@@ -1132,9 +1182,11 @@ const listHTML = `<!DOCTYPE html>
   </footer>
 
   <script>
-    // 分页状态
+    const bjTime = ${bjTime.toString()};
+    const escapeHtml = ${escapeHtml.toString()};
     let currentPage = 1;
     const itemsPerPage = 20;
+
     async function loadPaginatedFiles(page) {
       try {
         const response = await fetch(\`/api/qry?page=\${page}\`);
@@ -1146,7 +1198,7 @@ const listHTML = `<!DOCTYPE html>
         console.log('Received files:', files);
         
         if (!Array.isArray(files)) {
-          throw new Error('Invalid data format: expected array');
+          throw new Error('数据格式无效: 需要数组');
         }
         
         renderFiles(files);
@@ -1159,8 +1211,6 @@ const listHTML = `<!DOCTYPE html>
     }
 
     function renderFiles(files) {
-      const bjTime = ${bjTime.toString()};
-      const escapeHtml = ${escapeHtml.toString()};
       const tbody = document.getElementById('file-table-body');
       tbody.innerHTML = files.map((file, index) => \`
         <tr>
@@ -1220,90 +1270,118 @@ const listHTML = `<!DOCTYPE html>
         .filter(id => id);
     }
 
-    // 批量删除记录
-    document.getElementById('delete-records').addEventListener('click', async function() {
+    // 删除记录（带进度条）
+    document.getElementById('delete-records').addEventListener('click', async function () {
       const ids = getSelectedIds();
       if (ids.length === 0) return alert('请选择要删除的记录');
       if (!confirm(\`确定要删除 \${ids.length} 条记录吗？\`)) return;
-      try {
-        const results = await Promise.allSettled(
-          ids.map(id => fetch(\`/api/rec/\${id}\`, {
-            method: 'DELETE'
-          }))
-        );
-        
-        const failedDeletes = results.filter(r => !r.value || !r.value.ok);
-        if (failedDeletes.length > 0) {
-          throw new Error(\`\${failedDeletes.length}条记录删除失败\`);
+      const btn = this;
+      const progressContainer = document.getElementById('delete-progress-container');
+      const progressBar = document.getElementById('delete-progress');
+      const progressText = document.getElementById('delete-progress-percent');
+      btn.disabled = true;
+      progressContainer.classList.remove('hidden');
+      progressBar.style.width = '0%';
+      progressText.textContent = '0%';
+      let successCount = 0;
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        try {
+          const res = await fetch(\`/api/rec/\${id}\`, { method: 'DELETE' });
+          const result = await res.json();
+          if (res.ok && result.deletedCount > 0) successCount++;
+        } catch (err) {
+          console.error(\`删除记录失败 [ID: \${id}]\`, err);
         }
-        
-        alert('成功删除选中记录');
-        loadPaginatedFiles(currentPage);
-      } catch (error) {
-        alert('删除失败: ' + error.message);
+        const percent = Math.round(((i + 1) * 100) / ids.length);
+        progressBar.style.width = \`\${percent}%\`;
+        progressText.textContent = \`\${percent}%\`;
+        await new Promise(resolve => requestAnimationFrame(resolve));
       }
+      progressBar.style.width = '100%';
+      progressText.textContent = '100%';
+      await new Promise(resolve => setTimeout(resolve, 300)); // 保持100%状态300ms
+      setTimeout(() => {
+        progressContainer.classList.add('hidden');
+        progressBar.style.width = '0%';
+        progressText.textContent = '0%';
+      }, 800);
+      btn.disabled = false;
+      alert(\`成功删除 \${successCount}/\${ids.length} 条记录\`);
+      loadPaginatedFiles(currentPage);
     });
 
-    // 批量删除文件
-    document.getElementById('delete-files').addEventListener('click', async function() {
+    // 批量删除文件（带进度条）
+    document.getElementById('delete-files').addEventListener('click', async function () {
       const ids = getSelectedIds();
       if (!ids.length) return alert('请选择要删除的文件');
-      if (!confirm(\`即将永久删除 \${ids.length} 个文件（云端文件也会删除），确定继续？\`)) return;
-      const deleteProgress = document.getElementById('delete-progress');
-      const deleteProgressPercent = document.getElementById('delete-progress-percent');
-      const deleteProgressContainer = document.getElementById('delete-progress-container');
-      const deleteBtn = this;
-      
-      try {
-        // 初始化进度条
-        deleteBtn.disabled = true;
-        deleteProgressContainer.classList.remove('hidden');
-        deleteProgress.style.width = '0%';
-        deleteProgressPercent.textContent = '0%';
-        const total = ids.length;
-        let completed = 0;
-        for (const id of ids) {
-          try {
-            const response = await fetch(\`/api/del/\${id}\`, { method: 'DELETE' });
-            if (!response.ok) throw new Error(await response.text());
-            // 更新进度
-            completed++;
-            const percent = Math.round((completed / total) * 100);
-            deleteProgress.style.width = \`\${percent}%\`;
-            deleteProgressPercent.textContent = \`\${percent}%\`;
-            // 添加延迟避免速率限制
-            await new Promise(r => setTimeout(r, 500));
-          } catch (error) {
-            console.error(\`删除文件 \${id} 失败:\`, error);
-          }
+      if (!confirm(\`即将永久删除 \${ids.length} 个文件 (不可逆)，确定继续？\`)) return;
+      const btn = this;
+      const progressContainer = document.getElementById('delete-progress-container');
+      const progressBar = document.getElementById('delete-progress');
+      const progressText = document.getElementById('delete-progress-percent');
+      btn.disabled = true;
+      progressContainer.classList.remove('hidden');
+      progressBar.style.width = '0%';
+      progressText.textContent = '0%';
+      let successCount = 0;
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        try {
+          const res = await fetch(\`/api/del/\${id}\`, { method: 'DELETE' });
+          const result = await res.json();
+          if (res.ok && result.successCount > 0) successCount++;
+        } catch (err) {
+          console.error(\`删除失败 [ID: \${id}]\`, err);
         }
-        const successCount = completed;
-        if (successCount === total) {
-          alert('删除成功！');
-        } else {
-          alert(\`成功删除 \${successCount} 个文件，\${total - successCount} 个失败\`);
-        }
-        loadPaginatedFiles(currentPage);
-      } catch (error) {
-        alert(\`删除失败: \${error.message}\`);
-      } finally {
-        deleteBtn.disabled = false;
-        deleteProgressContainer.classList.add('hidden');
+        const percent = Math.round(((i + 1) * 100) / ids.length);
+        progressBar.style.width = \`\${percent}%\`;
+        progressText.textContent = \`\${percent}%\`;
+        await new Promise(resolve => requestAnimationFrame(resolve));
       }
+      progressBar.style.width = '100%';
+      progressText.textContent = '100%';
+      await new Promise(resolve => setTimeout(resolve, 300));
+      setTimeout(() => {
+        progressContainer.classList.add('hidden');
+        progressBar.style.width = '0%';
+        progressText.textContent = '0%';
+      }, 800);
+      btn.disabled = false;
+      alert(\`成功删除 \${successCount}/\${ids.length} 个文件\`);
+      loadPaginatedFiles(currentPage);
     });
 
     // 批量复制直链
-    document.getElementById('copy-urls').addEventListener('click', function() {
+    document.getElementById('copy-urls').addEventListener('click', async function() {
+      const btn = this;
       const selectedCheckboxes = document.querySelectorAll('.form-checkbox:checked');
       const urls = [];
+      
       selectedCheckboxes.forEach(checkbox => {
+        if (checkbox.id === 'select-all-check') return;
         const row = checkbox.closest('tr');
         const directUrl = row.querySelector('td:nth-child(8) a').href;
         urls.push(directUrl);
       });
-      if (urls.length === 0) return alert('请选择要复制的文件');
-      navigator.clipboard.writeText(urls.join('\\n'));
-      alert(\`已复制 \${urls.length} 个直链\`);
+      if (urls.length === 0) { alert('请选择要复制的文件'); return; }
+      
+      try {
+        await navigator.clipboard.writeText(urls.join('\\n'));
+        const originalHTML = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check mr-2"></i>已复制';
+        btn.classList.add('cursor-not-allowed', 'opacity-75');
+        alert(\`成功复制 \${urls.length} 个直链\`);
+        setTimeout(() => {
+          btn.innerHTML = originalHTML;
+          btn.classList.remove('cursor-not-allowed', 'opacity-75');
+        }, 2000);
+      } catch (err) {
+        console.error('复制失败:', err);
+        alert('复制失败，请手动复制链接');
+      }
     });
   </script>
 </body>
