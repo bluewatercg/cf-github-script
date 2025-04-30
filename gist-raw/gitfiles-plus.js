@@ -162,7 +162,7 @@ export default {
       const match = pathname.match(new RegExp(`^${path}$`));
       if (match) return await handler(request, ...match.slice(1));
     }
-    return jsonResponse({ error: '不存在' }, 404, corsHeaders());
+    return jsonResponse({ error: '不存在的页面' }, 404, corsHeaders());
   }
 };
 
