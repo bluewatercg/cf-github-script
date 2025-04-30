@@ -1225,7 +1225,7 @@ const listHTML = `<!DOCTYPE html>
         const response = await fetch(\`/api/qry?page=\${page}\`);
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || 'Network response was not ok');
+          throw new Error(errorData.error || '网络响应不正常');
         }
         const files = await response.json();
         console.log('Received files:', files);
@@ -1304,14 +1304,14 @@ const listHTML = `<!DOCTYPE html>
         checkboxes.forEach(checkbox => checkbox.checked = e.target.checked);
     });
 
-    // 全选功能（仅数据行）
+    // 全选功能
     document.getElementById('select-all').addEventListener('click', function() {
         const checkboxes = document.querySelectorAll('.form-checkbox[data-id]');
         checkboxes.forEach(checkbox => checkbox.checked = true);
         updateHeaderCheckbox();
     });
 
-    // 反选功能（仅数据行）
+    // 反选功能
     document.getElementById('select-reverse').addEventListener('click', function() {
         const checkboxes = document.querySelectorAll('.form-checkbox[data-id]');
         checkboxes.forEach(checkbox => checkbox.checked = !checkbox.checked);
