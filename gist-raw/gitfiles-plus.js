@@ -355,16 +355,33 @@ async function saveToDatabase(data, db) {
 // 文件查询
 async function handleFileQuery(env, params) {
   const corsHeader = corsHeaders();
-  const page = parseInt(params.get('page')) || 1;
-  const limit = 20;
-  const result = await env.GH_DB.prepare(`
+  const allPages = params.get('all_pages') === 'true';
+  if (allPages && params.has('page')) {
+    return jsonResponse(
+      { error: "all_pages参数不能与page参数共存" },
+      400, corsHeader
+    );
+  }
+
+  let baseSQL = `
     SELECT id, filename, filesize, upload_type,
            upload_time, page_url, direct_url
     FROM git_files
     ORDER BY upload_time DESC
-    LIMIT ? OFFSET ?
-  `).bind(limit, (page - 1) * limit).all();
-  return jsonResponse(result.results || result.rows || [], 200, corsHeader);
+  `;
+
+  let query;
+  if (allPages) {
+    query = env.GH_DB.prepare(`${baseSQL} LIMIT ?`).bind(5000);
+  } else {
+    const page = parseInt(params.get('page')) || 1;
+    const limit = 20;
+    query = env.GH_DB.prepare(`${baseSQL} LIMIT ? OFFSET ?`)
+      .bind(limit, (page - 1) * limit);
+  }
+  const result = await query.all();
+  if (allPages) corsHeader['Cache-Control'] = 'public, max-age=600';
+  return jsonResponse(result.results || [], 200, corsHeader);
 }
 
 // ========== 通用删除操作处理器 ==========
