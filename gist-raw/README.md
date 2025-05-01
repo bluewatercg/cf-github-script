@@ -115,7 +115,7 @@ curl "https://your-domain.com/api/qry?all_pages=true"
 **命令示例**:
 
 ```bash
-curl -X DELETE "https://your-domain.com/api/rec?ids=1,2,3"
+curl -X DELETE "https://your-domain.com/api/rec/1,2,3"
 ```
 
 **响应示例（200 OK）**:
@@ -150,7 +150,7 @@ curl -X DELETE "https://your-domain.com/api/rec?ids=1,2,3"
 ```bash
 curl -X DELETE \
   -H "Authorization: Bearer YOUR_GH_TOKEN" \
-  "https://your-domain.com/api/file?ids=1,2,3"
+  "https://your-domain.com/api/del/1,2,3"
 ```
 
 **响应示例（200 OK）**:
