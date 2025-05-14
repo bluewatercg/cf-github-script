@@ -1,10 +1,23 @@
 #!/bin/bash
 
-# 配置变量
-API_TOKEN="" # 需要pages和woker的编辑权限
-ACCOUNT_ID="" # 账户ID
-PROJECT_NAME="" # 项目名
-KEEP=3 # 默认保留最新的3个
+# 配置变量（请根据需要修改）
+API_TOKEN=""       # 需要 Pages 和 Workers 的编辑权限
+ACCOUNT_ID=""      # 你的 Cloudflare 账户 ID
+PROJECT_NAME=""    # 项目名
+
+# 默认保留最新部署数量（可通过脚本参数覆盖）
+KEEP=3
+
+# 如果传入了参数则覆盖默认保留数量
+if [[ -n "$1" ]]; then
+  KEEP=$1
+fi
+
+# 检查必要变量是否已设置
+if [[ -z "$API_TOKEN" || -z "$ACCOUNT_ID" || -z "$PROJECT_NAME" ]]; then
+  echo "❌ 错误：请先设置 API_TOKEN, ACCOUNT_ID 和 PROJECT_NAME"
+  exit 1
+fi
 
 # 存储所有部署 ID 的数组
 all_deployments=()
@@ -34,14 +47,18 @@ while true; do
 done
 
 total=${#all_deployments[@]}
+echo "📦 共获取到 $total 个部署。"
 
-echo "共获取到 $total 个部署。"
-
-# 排序并获取要保留的最新3个
-keep_ids=$(printf "%s\n" "${all_deployments[@]}" | tac | head -n $KEEP)
+# 排序并获取要保留的最新 N 个
+keep_ids=$(printf "%s\n" "${all_deployments[@]}" | tac | head -n "$KEEP")
 delete_ids=$(printf "%s\n" "${all_deployments[@]}" | grep -vxFf <(echo "$keep_ids"))
 
-echo "将删除以下部署（保留最近3个）:"
+if [[ -z "$delete_ids" ]]; then
+  echo "✅ 无需删除部署，已满足保留数量 $KEEP。"
+  exit 0
+fi
+
+echo "🚮 将删除以下部署（保留最近 $KEEP 个）:"
 echo "$delete_ids"
 
 # 删除旧部署
