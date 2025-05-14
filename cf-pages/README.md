@@ -1,12 +1,16 @@
 ## del-pages.sh 使用说明
 
-修改脚本开头的配置参数：
+### 修改脚本开头的配置参数：
 
-- CF_API_TOKEN: 您的 Cloudflare API 令牌，需要编辑pages的权限
-- ACCOUNT_ID: 您的 Cloudflare 账户 ID
-- PROJECT_NAME: 您的 Pages 项目名称
-- 给脚本执行权限：chmod +x del-pages.sh
-- 运行脚本：bash ./del-pages.sh
+- API_TOKEN: Cloudflare API 令牌，需要编辑pages的权限
+- ACCOUNT_ID: Cloudflare 账户 ID
+- PROJECT_NAME: Pages 项目名称
+- KEEP: 保留的部署数量，默认保留最新的3个
+
+### 使用方式
+
+- 默认保留最新3个部署：`bash del-pages.sh`
+- 保留最新5个部署：`bash del-pages.sh 5`
 
 ## 注意事项
 
