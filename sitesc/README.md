@@ -19,7 +19,16 @@
 
 ## 兼容性说明：
 
-此代码兼容以下 S3 兼容存储服务：
+1. **Cloudflare R2**：
+	 - `S3_ENDPOINT`: `https://<account-id>.r2.cloudflarestorage.com`
+	 - `upload_type`: "Cloudflare R2"
+	 
+2. **Backblaze B2**：
+	 - `S3_ENDPOINT`: `https://s3.<region>.backblazeb2.com`
+	 - `upload_type`: "Backblaze B2"
+	
+3. **其他 S3 兼容服务**：
+	 - 将使用默认的 "S3" 作为 `upload_type`
 
 ## 使用说明：
 
