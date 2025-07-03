@@ -250,9 +250,9 @@ function encodeRfc3986(urlEncodedStr) {
 
 function guessServiceRegion(url, headers) {
   const { hostname, pathname } = url;
-  const endpoint = env.BF_ENDPOINT || "s3.bitiful.net";
-  const region = env.BF_REGION || "cn-east-1";
-  if (hostname.endsWith(`.${endpoint}`)) return ["s3", region];
+  const bfendpoint = env.BF_ENDPOINT || "s3.bitiful.net";
+  const bfregion = env.BF_REGION || "cn-east-1";
+  if (hostname.endsWith(`.${bfendpoint}`)) return ["s3", bfregion];
   if (hostname.endsWith(".r2.cloudflarestorage.com")) return ["s3", "auto"];
   if (hostname.endsWith(".backblazeb2.com")) {
     const match = hostname.match(/^(?:[^.]+\.)?s3\.([^.]+)\.backblazeb2\.com$/);
