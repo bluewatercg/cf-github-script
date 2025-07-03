@@ -250,7 +250,7 @@ function encodeRfc3986(urlEncodedStr) {
 
 function guessServiceRegion(url, headers) {
   const { hostname, pathname } = url;
-  if (hostname.endsWith(".oss.bitiful.com")) return ["s3", "cn-north-1"];
+  if (hostname.endsWith(".s3.bitiful.net")) return ["s3", "cn-east-1"];
   if (hostname.endsWith(".r2.cloudflarestorage.com")) return ["s3", "auto"];
   if (hostname.endsWith(".backblazeb2.com")) {
     const match = hostname.match(/^(?:[^.]+\.)?s3\.([^.]+)\.backblazeb2\.com$/);
@@ -298,7 +298,7 @@ export default {
     
     // 设置目标为 Bitiful OSS
     const bucket = env.BUCKET_NAME;
-    const targetHost = `${bucket}.oss.bitiful.com`;
+    const targetHost = `${bucket}.s3.bitiful.net`;
     const targetUrl = new URL(url.toString());
     targetUrl.protocol = "https:";
     targetUrl.hostname = targetHost;
@@ -319,7 +319,7 @@ export default {
       accesskeyID: env.BF_ACCESS_KEY_ID,
       secretAccessKey: env.BF_SECRET_ACCESS_KEY,
       service: "s3",
-      region: env.BF_REGION || "cn-north-1"
+      region: env.BF_REGION || "cn-east-1"
     });
 
     try {
