@@ -287,6 +287,18 @@ const UNSIGNABLE_HEADERS_PROXY = [
   "cf-connecting-ip", "cf-ray", "cf-request-id"
 ];
 
+// 图片 MIME 类型映射
+const IMAGE_MIME_TYPES = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
+  ico: "image/x-icon"
+};
+
 export default {
   async fetch(request, env, ctx) {
     // 仅允许 GET/HEAD 请求
@@ -336,6 +348,15 @@ export default {
       // 克隆响应以添加自定义头
       const newHeaders = new Headers(response.headers);
       newHeaders.set("Cache-Control", cacheControl);
+
+      // 图片格式直接预览而非下载
+      const fileExtension = url.pathname.split('.').pop().toLowerCase();
+      if (IMAGE_MIME_TYPES[fileExtension]) {
+        newHeaders.set("Content-Type", IMAGE_MIME_TYPES[fileExtension]);
+      }
+      if (newHeaders.has("Content-Disposition")) {
+        newHeaders.delete("Content-Disposition");
+      }      
       
       return new Response(response.body, {
         status: response.status,
