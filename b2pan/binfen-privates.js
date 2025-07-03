@@ -111,7 +111,7 @@ class AwsV4Signer {
       .sort();
     this.signedHeaders = this.signableHeaders.join(";");
     this.canonicalHeaders = this.signableHeaders
-      .map(header => header + ":" + (header === "host" ? this.url.host : (this.headers.get(header) || "").replace(/\s+/g, " "))
+      .map(header => header + ":" + (header === "host" ? this.url.host : (this.headers.get(header) || "").replace(/\s+/g, " ")))
       .join("\n");
       
     this.credentialString = [this.datetime.slice(0, 8), this.region, this.service, "aws4_request"].join("/");
