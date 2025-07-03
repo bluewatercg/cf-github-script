@@ -248,14 +248,9 @@ function encodeRfc3986(urlEncodedStr) {
   return urlEncodedStr.replace(/[!'()*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
 }
 
-// 重点修改：识别缤纷云域名并返回正确的区域
 function guessServiceRegion(url, headers) {
   const { hostname, pathname } = url;
-  
-  // 识别缤纷云域名 - 修改点 1
-  if (hostname.endsWith(".s3.bitiful.net")) return ["s3", "cn-east-1"];
-  
-  // 保留其他云服务的识别逻辑
+  if (hostname.endsWith(".oss.bitiful.com")) return ["s3", "cn-north-1"];
   if (hostname.endsWith(".r2.cloudflarestorage.com")) return ["s3", "auto"];
   if (hostname.endsWith(".backblazeb2.com")) {
     const match = hostname.match(/^(?:[^.]+\.)?s3\.([^.]+)\.backblazeb2\.com$/);
@@ -301,22 +296,13 @@ export default {
 
     const url = new URL(request.url);
     
-    // 设置目标为缤纷云 OSS - 修改点 2
+    // 设置目标为 Bitiful OSS
     const bucket = env.BUCKET_NAME;
-    const targetHost = env.USE_PATH_STYLE 
-      ? "s3.bitiful.net"  // 路径式访问
-      : `${bucket}.s3.bitiful.net`; // 虚拟托管式访问
-    
-    // 构建目标URL
+    const targetHost = `${bucket}.oss.bitiful.com`;
     const targetUrl = new URL(url.toString());
     targetUrl.protocol = "https:";
     targetUrl.hostname = targetHost;
     targetUrl.port = "";
-    
-    // 如果是路径式访问，需要在路径前添加桶名
-    if (env.USE_PATH_STYLE === "true") {
-      targetUrl.pathname = `/${bucket}${targetUrl.pathname}`;
-    }
     
     // 过滤不可签名头
     const headers = new Headers();
@@ -328,12 +314,12 @@ export default {
       }
     }
 
-    // 创建 AWS 签名客户端 - 修改点 3
+    // 创建 AWS 签名客户端
     const client = new AwsClient({
       accesskeyID: env.BF_ACCESS_KEY_ID,
       secretAccessKey: env.BF_SECRET_ACCESS_KEY,
       service: "s3",
-      region: env.BF_REGION || "cn-east-1"  // 使用 cn-east-1 区域
+      region: env.BF_REGION || "cn-north-1"
     });
 
     try {
@@ -351,12 +337,6 @@ export default {
       const newHeaders = new Headers(response.headers);
       newHeaders.set("Cache-Control", cacheControl);
       
-      // 设置 CORS 头部（可选）
-      if (env.CORS_ENABLED === "true") {
-        newHeaders.set("Access-Control-Allow-Origin", env.ALLOWED_ORIGIN || "*");
-        newHeaders.set("Access-Control-Allow-Methods", "GET, HEAD");
-      }
-      
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
@@ -371,10 +351,7 @@ export default {
         stack: err.stack
       }), {
         status: 500,
-        headers: { 
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store"
-        }
+        headers: { "Content-Type": "application/json" }
       });
     }
   }
