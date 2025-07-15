@@ -123,12 +123,21 @@ var AliyunV1Signer = class {
     // 添加必要头部
     this.headers.set("Date", this.datetime);
     this.headers.set("Host", this.url.hostname);
-    let path = this.url.pathname.replace(/^\/+|\/+$/g, '');
-    this.canonicalizedResource = `/${path}`;
-    // 处理路径编码
-    // this.encodedPath = encodeURIComponent(this.url.pathname).replace(/%2F/g, "/");
+    // 关键修复：正确的路径格式
+    const path = this.url.pathname;
+    // 移除存储桶名称前缀
+    const bucketPrefix = `/${this.bucketName}/`;
+    if (path.startsWith(bucketPrefix)) {
+        this.canonicalizedResource = path.substring(bucketPrefix.length - 1);
+    } else {
+        this.canonicalizedResource = path;
+    }
+    
+    // 确保路径以斜杠开头
+    if (!this.canonicalizedResource.startsWith('/')) {
+        this.canonicalizedResource = '/' + this.canonicalizedResource;
+    }
     // 准备签名参数
-    // this.canonicalizedResource = this.url.pathname;
     this.canonicalizedOSSHeaders = this.getCanonicalizedOSSHeaders();
   }
 
@@ -142,7 +151,6 @@ var AliyunV1Signer = class {
     }
     
     headers.sort((a, b) => a[0].localeCompare(b[0]));
-    
     return headers.map(([k, v]) => `${k}:${v}`).join("\n");
   }
 
@@ -162,6 +170,7 @@ var AliyunV1Signer = class {
   }
 
   getStringToSign() {
+    // 严格遵守阿里云签名格式
     return [
       this.method.toUpperCase(), // HTTP方法
       this.headers.get("Content-MD5") || "", // Content-MD5
