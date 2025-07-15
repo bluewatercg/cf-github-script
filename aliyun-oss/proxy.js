@@ -115,7 +115,7 @@ var AliyunV1Signer = class {
     this.bucketName = bucketName;
     this.region = region;
     this.cache = cache || new Map();
-    this.datetime = datetime || new Date().toUTCString();
+    this.datetime = datetime || new Date().toGMTString();
     this.signQuery = signQuery;
     
     // 设置OSS请求URL
@@ -124,10 +124,8 @@ var AliyunV1Signer = class {
     // 添加必要头部
     this.headers.set("Date", this.datetime);
     this.headers.set("Host", this.url.hostname);
-    
     // 处理路径编码
     this.encodedPath = encodeURIComponent(this.url.pathname).replace(/%2F/g, "/");
-    
     // 准备签名参数
     this.canonicalizedResource = this.url.pathname;
     this.canonicalizedOSSHeaders = this.getCanonicalizedOSSHeaders();
@@ -150,13 +148,10 @@ var AliyunV1Signer = class {
   async sign() {
     // 生成待签名字符串
     const stringToSign = this.getStringToSign();
-    
     // 计算签名
     const signature = await this.calculateSignature(stringToSign);
-    
     // 添加Authorization头部
     this.headers.set("Authorization", `OSS ${this.accessKeyId}:${signature}`);
-    
     return {
       method: this.method,
       url: this.url,
@@ -166,6 +161,7 @@ var AliyunV1Signer = class {
   }
 
   getStringToSign() {
+    // 严格遵守签名格式
     return [
       this.method.toUpperCase(),
       this.headers.get("Content-MD5") || "",
