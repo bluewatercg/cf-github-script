@@ -120,14 +120,15 @@ var AliyunV1Signer = class {
     
     // 设置OSS请求URL
     this.url.hostname = `${this.bucketName}.${this.region}.aliyuncs.com`;
-    
     // 添加必要头部
     this.headers.set("Date", this.datetime);
     this.headers.set("Host", this.url.hostname);
+    let path = this.url.pathname.replace(/^\/+|\/+$/g, '');
+    this.canonicalizedResource = `/${path}`;
     // 处理路径编码
-    this.encodedPath = encodeURIComponent(this.url.pathname).replace(/%2F/g, "/");
+    // this.encodedPath = encodeURIComponent(this.url.pathname).replace(/%2F/g, "/");
     // 准备签名参数
-    this.canonicalizedResource = this.url.pathname;
+    // this.canonicalizedResource = this.url.pathname;
     this.canonicalizedOSSHeaders = this.getCanonicalizedOSSHeaders();
   }
 
@@ -161,14 +162,13 @@ var AliyunV1Signer = class {
   }
 
   getStringToSign() {
-    // 严格遵守签名格式
     return [
-      this.method.toUpperCase(),
-      this.headers.get("Content-MD5") || "",
-      this.headers.get("Content-Type") || "",
-      this.headers.get("Date"),
-      this.canonicalizedOSSHeaders,
-      this.canonicalizedResource
+      this.method.toUpperCase(), // HTTP方法
+      this.headers.get("Content-MD5") || "", // Content-MD5
+      this.headers.get("Content-Type") || "", // Content-Type
+      this.headers.get("Date"), // Date头
+      this.canonicalizedOSSHeaders, // 规范化的OSS头
+      this.canonicalizedResource // 规范化的资源路径
     ].join("\n");
   }
 
