@@ -1,23 +1,10 @@
-// Cloudflare Worker 反代阿里云OSS
-// 替代自定义域名，提供缓存加速和CORS支持
-// Worker透明代理到阿里云OSS，添加缓存和CORS
-//
+// Cloudflare Worker 反代阿里云OSS (最终修复签名问题)
+// 完全修复路径编码问题
 // 环境变量配置（在Cloudflare Worker中设置）：
-//OSS_BUCKET_NAME=your-bucket-name  // 必需：阿里云OSS存储桶名称
-//OSS_REGION=oss-cn-hangzhou  // 必需：阿里云OSS区域
-//OSS_ACCESS_KEY_ID=your-access-key-id  // 必需：阿里云OSS访问密钥ID
-//OSS_SECRET_ACCESS_KEY=your-secret-access-key  // 必需：阿里云OSS秘密访问密钥
-//
-// 缓存控制（可选）：
-//CACHE_ENABLED=true  // 是否启用缓存（默认true）
-//CACHE_TTL=86400  // Worker缓存时间（秒，默认24小时）
-//CDN_CACHE_TTL=2592000  // CDN边缘缓存时间（秒，默认30天）
-//
-// 安全控制（可选）：
-// ALLOWED_REFERERS=https://yourdomain.com  // 允许的来源域名（防盗链）
-//
-// 其他配置（可选）：
-// ALLOWED_HEADERS=content-type,range  // 自定义允许的请求头
+// OSS_BUCKET_NAME=your-bucket-name
+// OSS_REGION=oss-cn-hongkong
+// OSS_ACCESS_KEY_ID=your-access-key-id
+// OSS_SECRET_ACCESS_KEY=your-secret-access-key
 
 // CORS配置
 const CORS_HEADERS = {
@@ -30,7 +17,23 @@ const CORS_HEADERS = {
 
 // 阿里云OSS签名实现
 var encoder = new TextEncoder();
-var UNSIGNABLE_HEADERS = new Set(["authorization", "content-type", "content-length", "user-agent", "presigned-expires", "expect", "range", "connection"]);
+
+// 从完整URL字符串中提取原始路径（保留编码）
+function extractRawPath(urlStr) {
+  try {
+    const urlObj = new URL(urlStr);
+    // 手动提取原始路径部分
+    const origin = urlObj.origin;
+    const rawPathAndQuery = urlStr.substring(origin.length);
+    const pathEndIndex = rawPathAndQuery.indexOf('?');
+    
+    // 返回路径部分（不包括查询参数）
+    return pathEndIndex >= 0 ? rawPathAndQuery.substring(0, pathEndIndex) : rawPathAndQuery;
+  } catch (e) {
+    console.error("提取原始路径失败:", e);
+    return new URL(urlStr).pathname;
+  }
+}
 
 var AliyunClient = class {
   constructor({ accessKeyId, secretAccessKey, bucketName, region, cache, retries, initRetryMs }) {
@@ -107,7 +110,6 @@ var AliyunV1Signer = class {
     if (region == null) throw new TypeError("region is a required option");
     
     this.method = method || (body ? "POST" : "GET");
-    this.url = new URL(url);
     this.headers = new Headers(headers || {});
     this.body = body;
     this.accessKeyId = accessKeyId;
@@ -115,30 +117,24 @@ var AliyunV1Signer = class {
     this.bucketName = bucketName;
     this.region = region;
     this.cache = cache || new Map();
-    this.datetime = datetime || new Date().toGMTString();
+    this.datetime = datetime || new Date().toUTCString();
     this.signQuery = signQuery;
     
-    // 设置OSS请求URL
+    // 保存原始URL字符串
+    this.originalUrlStr = url;
+    
+    // 创建用于签名的URL对象
+    this.url = new URL(url);
     this.url.hostname = `${this.bucketName}.${this.region}.aliyuncs.com`;
+    
     // 添加必要头部
     this.headers.set("Date", this.datetime);
     this.headers.set("Host", this.url.hostname);
-    // 关键修复：正确的路径格式
-    const path = this.url.pathname;
-    // 移除存储桶名称前缀
-    const bucketPrefix = `/${this.bucketName}/`;
-    if (path.startsWith(bucketPrefix)) {
-        this.canonicalizedResource = path.substring(bucketPrefix.length - 1);
-    } else {
-        this.canonicalizedResource = path;
-    }
     
-    // 确保路径以斜杠开头
-    if (!this.canonicalizedResource.startsWith('/')) {
-        this.canonicalizedResource = '/' + this.canonicalizedResource;
-    }
-    // 准备签名参数
-    this.canonicalizedOSSHeaders = this.getCanonicalizedOSSHeaders();
+    // 从原始URL字符串中提取原始路径（保留编码）
+    this.canonicalizedResource = extractRawPath(this.originalUrlStr);
+    
+    console.log(`签名资源路径: ${this.canonicalizedResource}`);
   }
 
   getCanonicalizedOSSHeaders() {
@@ -146,21 +142,27 @@ var AliyunV1Signer = class {
     for (const [key, value] of this.headers.entries()) {
       const lowerKey = key.toLowerCase();
       if (lowerKey.startsWith("x-oss-")) {
-        headers.push([lowerKey, value]);
+        headers.push([lowerKey, value.trim()]);
       }
     }
     
     headers.sort((a, b) => a[0].localeCompare(b[0]));
+    
     return headers.map(([k, v]) => `${k}:${v}`).join("\n");
   }
 
   async sign() {
     // 生成待签名字符串
     const stringToSign = this.getStringToSign();
+    
+    console.log(`待签名字符串: ${stringToSign}`);
+    
     // 计算签名
     const signature = await this.calculateSignature(stringToSign);
+    
     // 添加Authorization头部
     this.headers.set("Authorization", `OSS ${this.accessKeyId}:${signature}`);
+    
     return {
       method: this.method,
       url: this.url,
@@ -170,21 +172,24 @@ var AliyunV1Signer = class {
   }
 
   getStringToSign() {
-    // 严格遵守阿里云签名格式
     return [
-      this.method.toUpperCase(), // HTTP方法
-      this.headers.get("Content-MD5") || "", // Content-MD5
-      this.headers.get("Content-Type") || "", // Content-Type
-      this.headers.get("Date"), // Date头
-      this.canonicalizedOSSHeaders, // 规范化的OSS头
-      this.canonicalizedResource // 规范化的资源路径
+      this.method.toUpperCase(),
+      this.headers.get("Content-MD5") || "",
+      this.headers.get("Content-Type") || "",
+      this.headers.get("Date"),
+      this.canonicalizedOSSHeaders + (this.canonicalizedOSSHeaders ? "\n" : ""),
+      this.canonicalizedResource
     ].join("\n");
   }
 
   async calculateSignature(stringToSign) {
+    // 使用正确的签名算法：HMAC-SHA1 + Base64
+    const key = encoder.encode(this.secretAccessKey);
+    const data = encoder.encode(stringToSign);
+    
     const cryptoKey = await crypto.subtle.importKey(
       "raw",
-      encoder.encode(this.secretAccessKey),
+      key,
       { name: "HMAC", hash: "SHA-1" },
       false,
       ["sign"]
@@ -193,21 +198,28 @@ var AliyunV1Signer = class {
     const signature = await crypto.subtle.sign(
       "HMAC",
       cryptoKey,
-      encoder.encode(stringToSign)
+      data
     );
     
-    return btoa(String.fromCharCode(...new Uint8Array(signature)));
+    // 将ArrayBuffer转换为Base64
+    return this.arrayBufferToBase64(signature);
+  }
+
+  arrayBufferToBase64(buffer) {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
   }
 };
 
-/**
- * 获取缓存设置
- * @param {Object} env - 环境变量
- * @returns {Object} 缓存设置
- */
+// 获取缓存设置
 function getCacheSettings(env) {
-  const cacheTtl = parseInt(env.CACHE_TTL) || 86400; // 默认24小时
-  const cdnCacheTtl = parseInt(env.CDN_CACHE_TTL) || 2592000; // 默认30天
+  const cacheTtl = parseInt(env.CACHE_TTL) || 86400;
+  const cdnCacheTtl = parseInt(env.CDN_CACHE_TTL) || 2592000;
 
   return {
     ttl: cacheTtl,
@@ -215,14 +227,7 @@ function getCacheSettings(env) {
   };
 }
 
-/**
- * 判断是否应该缓存请求
- * @param {string} method - HTTP方法
- * @param {URL} url - 请求URL
- * @param {Headers} headers - 请求头
- * @param {Object} env - 环境变量
- * @returns {boolean} 是否应该缓存
- */
+// 判断是否应该缓存请求
 function shouldCache(method, url, headers, env) {
   if (env.CACHE_ENABLED === "false") {
     return false;
@@ -232,22 +237,13 @@ function shouldCache(method, url, headers, env) {
     return false;
   }
 
-  if (headers.has("Range")) {
-    console.log(`Range请求，允许缓存以优化视频播放体验: ${url.pathname}`);
-  }
-
   return true;
 }
 
-/**
- * 生成统一的缓存键
- * @param {URL} url - 请求URL
- * @param {string} method - HTTP方法
- * @returns {Request} 缓存键
- */
+// 生成统一的缓存键
 function generateCacheKey(url, method) {
   const cacheUrl = new URL(url);
-  cacheUrl.search = ""; // 清除所有查询参数
+  cacheUrl.search = "";
 
   return new Request(cacheUrl.toString(), {
     method: method,
@@ -255,22 +251,13 @@ function generateCacheKey(url, method) {
   });
 }
 
-/**
- * 检查是否为下载请求
- * @param {URL} url - 请求URL
- * @returns {boolean} 是否为下载请求
- */
+// 检查是否为下载请求
 function isDownloadRequest(url) {
   return url.searchParams.has("response-content-disposition") || 
          url.searchParams.get("response-content-disposition")?.includes("attachment");
 }
 
-/**
- * 处理下载响应头部
- * @param {Response} response - 原始响应
- * @param {URL} originalUrl - 原始请求URL
- * @returns {Response} 处理后的响应
- */
+// 处理下载响应头部
 function processDownloadResponse(response, originalUrl) {
   if (!isDownloadRequest(originalUrl)) {
     return response;
@@ -300,12 +287,7 @@ function processDownloadResponse(response, originalUrl) {
   return response;
 }
 
-/**
- * 验证请求来源（防盗链）
- * @param {Request} request - 请求对象
- * @param {Object} env - 环境变量
- * @returns {boolean} 验证是否通过
- */
+// 验证请求来源（防盗链）
 function validateReferer(request, env) {
   if (!env.ALLOWED_REFERERS) {
     return true;
@@ -328,12 +310,7 @@ function validateReferer(request, env) {
   return true;
 }
 
-/**
- * 添加CORS头部到响应
- * @param {Response} response - 原始响应
- * @param {string} cacheStatus - 缓存状态
- * @returns {Response} 添加了CORS头部的响应
- */
+// 添加CORS头部到响应
 function addCorsHeaders(response, cacheStatus = "MISS") {
   const newResponse = new Response(response.body, response);
 
@@ -347,10 +324,7 @@ function addCorsHeaders(response, cacheStatus = "MISS") {
   return newResponse;
 }
 
-/**
- * 处理OPTIONS预检请求
- * @returns {Response} CORS预检响应
- */
+// 处理OPTIONS预检请求
 function handleOptions() {
   return new Response(null, {
     status: 200,
@@ -358,27 +332,20 @@ function handleOptions() {
   });
 }
 
-/**
- * 构建阿里云OSS URL
- * @param {URL} originalUrl - 原始请求URL
- * @param {Object} env - 环境变量
- * @returns {string} OSS URL
- */
-function buildOssUrl(originalUrl, env) {
-  const ossUrl = new URL(originalUrl);
-  ossUrl.hostname = `${env.OSS_BUCKET_NAME}.${env.OSS_REGION}.aliyuncs.com`;
-  return ossUrl.toString();
+// 构建阿里云OSS URL
+function buildOssUrl(originalUrlStr, env) {
+  const urlObj = new URL(originalUrlStr);
+  // 保留原始路径和查询参数
+  const rawPathAndQuery = originalUrlStr.substring(urlObj.origin.length);
+  return `https://${env.OSS_BUCKET_NAME}.${env.OSS_REGION}.aliyuncs.com${rawPathAndQuery}`;
 }
 
-/**
- * 使用阿里云签名发送请求到OSS
- * @param {Request} request - 原始请求
- * @param {URL} originalUrl - 原始URL
- * @param {Object} env - 环境变量
- * @returns {Response} OSS响应
- */
-async function signAndFetchFromOss(request, originalUrl, env) {
-  const ossUrl = buildOssUrl(originalUrl, env);
+// 使用阿里云签名发送请求到OSS
+async function signAndFetchFromOss(request, env) {
+  const originalUrlStr = request.url;
+  const ossUrl = buildOssUrl(originalUrlStr, env);
+
+  console.log(`代理请求到OSS: ${ossUrl}`);
 
   // 创建阿里云客户端
   const ossClient = new AliyunClient({
@@ -401,22 +368,17 @@ async function signAndFetchFromOss(request, originalUrl, env) {
   // 发送已签名的请求
   const response = await fetch(signedRequest);
 
-  console.log(`📡 OSS响应状态: ${response.status} ${response.statusText}`);
+  console.log(`OSS响应状态: ${response.status} ${response.statusText}`);
   if (!response.ok) {
     const errorResponse = response.clone();
     const errorText = await errorResponse.text();
-    console.log(`❌ OSS错误响应: ${errorText}`);
+    console.log(`OSS错误响应: ${errorText}`);
   }
 
   return response;
 }
 
-/**
- * 过滤请求头部
- * @param {Headers} headers - 原始请求头部
- * @param {Object} env - 环境变量
- * @returns {Headers} 过滤后的头部
- */
+// 过滤请求头部
 function filterHeaders(headers, env) {
   const filteredHeaders = new Headers();
 
@@ -428,7 +390,6 @@ function filterHeaders(headers, env) {
     "content-type",
     "content-length",
     "cache-control",
-    "authorization", 
   ];
 
   if (env.ALLOWED_HEADERS) {
@@ -446,14 +407,7 @@ function filterHeaders(headers, env) {
   return filteredHeaders;
 }
 
-/**
- * 处理缓存请求
- * @param {Request} request - 请求对象
- * @param {URL} originalUrl - 原始URL
- * @param {Object} env - 环境变量
- * @param {Object} ctx - 执行上下文
- * @returns {Response} 响应
- */
+// 处理缓存请求
 async function handleCachedRequest(request, originalUrl, env, ctx) {
   const cache = caches.default;
   const cacheKey = generateCacheKey(originalUrl, request.method);
@@ -466,7 +420,7 @@ async function handleCachedRequest(request, originalUrl, env, ctx) {
   }
 
   console.log(`缓存未命中，处理请求到OSS: ${originalUrl.pathname}`);
-  let response = await signAndFetchFromOss(request, originalUrl, env);
+  let response = await signAndFetchFromOss(request, env);
 
   if (response.ok && shouldCache(request.method, originalUrl, request.headers, env)) {
     const cacheSettings = getCacheSettings(env);
@@ -519,6 +473,7 @@ export default {
 
     try {
       const originalUrl = new URL(request.url);
+      console.log(`处理请求: ${originalUrl.pathname}`);
 
       if (!validateReferer(request, env)) {
         return new Response(
@@ -540,7 +495,7 @@ export default {
         return await handleCachedRequest(request, originalUrl, env, ctx);
       } else {
         console.log(`直接转发（不缓存）: ${originalUrl.pathname}`);
-        const response = await signAndFetchFromOss(request, originalUrl, env);
+        const response = await signAndFetchFromOss(request, env);
         const processedResponse = processDownloadResponse(response, originalUrl);
         return addCorsHeaders(processedResponse, "BYPASS");
       }
