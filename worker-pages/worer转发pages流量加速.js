@@ -3,8 +3,8 @@ addEventListener('fetch', event => {
 })
 
 async function handleRequest(request) {
-  // ✅ 使用你的真实Pages地址（保持第一个脚本的格式）
-  const targetBase = 'https://your-actual-project.pages.dev'
+  // ✅ 使用你的Pages默认地址
+  const targetBase = 'https://your-project.pages.dev'
 
   if (request.headers.get('Upgrade') === 'websocket') {
     return fetch(request)
