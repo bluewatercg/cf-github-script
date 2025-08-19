@@ -115,7 +115,7 @@ async function checkRepoIsPrivate(username, repo, env, event, request) {
       }
     });
     // 使用waitUntil确保缓存操作不影响主流程
-    const cachePromise = cache.put(cacheKey, cacheResponse); 
+    const cachePromise = cache.put(cacheKey, cacheResponse);
     if (event) { event.waitUntil(cachePromise); }
     else { await cachePromise; }
     return isPrivate;
@@ -147,9 +147,167 @@ async function initializeDatabase(db) {
   }
 }
 
+// 密码验证相关
+const PASSWORD_COOKIE_NAME = 'gitfiles_auth';
+const PASSWORD = '123123'; // 可以通过env覆盖
+const COOKIE_DAYS = 7; // 默认7天，可以通过env覆盖
+
+async function checkAuth(request, env) {
+  const cookie = request.headers.get('Cookie') || '';
+  const password = env.PASSWORD || PASSWORD;
+  return cookie.includes(`${PASSWORD_COOKIE_NAME}=${password}`);
+}
+
+function setAuthCookie(env) {
+  const expires = new Date();
+  const password = env.PASSWORD || PASSWORD;
+  const days = env.COOKIE_DAYS ? parseInt(env.COOKIE_DAYS) : COOKIE_DAYS;
+  
+  expires.setDate(expires.getDate() + days);
+  return `${
+    PASSWORD_COOKIE_NAME
+  }=${
+    password
+  }; Path=/; Expires=${
+    expires.toUTCString()
+  }; HttpOnly; Secure; SameSite=Lax`;
+}
+
+// 登录页面HTML
+const LOGIN_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <title>身份验证</title>
+  ${headLinks()}
+  <style>
+    .login-container {
+      width: 480px;
+      padding: 2rem;
+      background: white;
+      border-radius: 0.5rem;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .login-title {
+      text-align: center;
+      margin-bottom: 1.5rem;
+      color: #1e40af;
+    }
+    .login-input {
+      width: 100%;
+      padding: 0.75rem;
+      margin-bottom: 1rem;
+      border: 1px solid #e5e7eb;
+      border-radius: 0.375rem;
+    }
+    .login-button {
+      width: 100%;
+      padding: 0.75rem;
+      background-color: #1e40af;
+      color: white;
+      border: none;
+      border-radius: 0.375rem;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .login-button:hover {
+      background-color: #1e3a8a;
+    }
+    .error-message {
+      color: #ef4444;
+      text-align: center;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body class="bg-gray-100">
+  <div class="login-container">
+    <h1 class="login-title text-2xl font-bold">GitHub 文件服务器</h1>
+    <form id="login-form">
+      <input type="password" id="password" class="login-input" placeholder="请输入访问密码" required>
+      <button type="submit" class="login-button">🔑 登录</button>
+    </form>
+    <div id="error-message" class="error-message hidden"></div>
+  </div>
+
+  <script>
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const password = document.getElementById('password').value;
+      const errorElement = document.getElementById('error-message');
+      
+      try {
+        const response = await fetch('/login', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ password })
+        });
+        
+        if (response.ok) {
+          window.location.href = '/';
+        } else {
+          const data = await response.json();
+          errorElement.textContent = data.error || '登录失败';
+          errorElement.classList.remove('hidden');
+        }
+      } catch (error) {
+        errorElement.textContent = '网络错误，请重试';
+        errorElement.classList.remove('hidden');
+      }
+    });
+  </script>
+</body>
+</html>`;
+
 export default {
   async fetch(request, env, event) {
-    const { pathname, searchParams } = new URL(request.url);    
+    const { pathname, searchParams } = new URL(request.url);
+    
+    // 处理登录请求
+    if (pathname === '/login' && request.method === 'POST') {
+      try {
+        const { password } = await request.json();
+        const correctPassword = env.PASSWORD || PASSWORD;
+        
+        if (password === correctPassword) {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              'Location': '/',
+              'Set-Cookie': setAuthCookie(env)
+            }
+          });
+        }
+        return jsonResponse({ error: '密码错误，请重试' }, 401);
+      } catch (error) {
+        return jsonResponse({ error: '无效请求，请重试' }, 400);
+      }
+    }
+    
+    // 检查除API路由外的页面访问权限
+    const isApiRoute = pathname.startsWith('/api/');
+    const isPublicRoute = pathname === '/login';
+    
+    if (!isApiRoute && !isPublicRoute) {
+      const isAuthenticated = await checkAuth(request, env);
+      if (!isAuthenticated) {
+        if (pathname === '/') {
+          return htmlResponse(LOGIN_HTML);
+        }
+        return new Response(null, {
+          status: 302,
+          headers: {
+            'Location': '/'
+          }
+        });
+      }
+    }
+
     await initializeDatabase(env.GH_DB);
     const routes = {
       '/': () => htmlResponse(HTML, corsHeaders()),
@@ -586,7 +744,7 @@ function headLinks() {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>" type="image/svg+xml">
     <link href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   `;
 }
 
@@ -594,14 +752,14 @@ function headLinks() {
 function copyright() {
   return `
     <p class="mb-0">
-      <span class="item">Copyright © 2025 Yutian81</span>
+      <span class="item"><i class="fas fa-copyright"></i> 2025 Copyright by Yutian81</span>
       <span class="separator mx-2">|</span>
       <a href="https://github.com/yutian81/cf-github-script/tree/main/gist-raw" class="item text-blue-600 hover:text-blue-800" target="_blank">
-        <i class="fab fa-github me-1"></i> GitHub
+        <i class="fab fa-github me-1"></i> GitHub Repo
       </a>
       <span class="separator mx-2">|</span>
       <a href="https://blog.811520.xyz/" class="item text-blue-600 hover:text-blue-800" target="_blank">  
-        <i class="fas fa-blog me-1"></i> 青云志博客
+        <i class="fas fa-blog me-1"></i> 青云志Blog
       </a>
     </p>
   `;
@@ -1464,4 +1622,3 @@ const listHTML = `<!DOCTYPE html>
   </script>
 </body>
 </html>`;
-
