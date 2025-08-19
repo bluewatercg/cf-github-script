@@ -15,6 +15,7 @@
 - GH_TOKEN：API功能必须
 - PASSWORD：登录密码，默认123123
 - RAW_DOMAIN：私库域名
+- RAW_TOEKN：私库查询参数，需要私库开启 `?token=鉴权秘钥`
 
 ## API文档
 
