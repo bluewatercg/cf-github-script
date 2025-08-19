@@ -84,7 +84,7 @@ async function buildDirectUrl(uploadType, username, idORrepo, branch, path, file
   }
   const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event, request);
   return isPrivate && env.RAW_DOMAIN
-    ? `https://${env.RAW_DOMAIN}/${username}/${idORrepo}/${branch}/${filePath}`
+    ? `https://${env.RAW_DOMAIN}/${idORrepo}/${branch}/${filePath}?token=yutian88881`
     : `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`;
 }
 
@@ -1464,3 +1464,4 @@ const listHTML = `<!DOCTYPE html>
   </script>
 </body>
 </html>`;
+
