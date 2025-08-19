@@ -11,8 +11,7 @@
 
 ## worker环境变量
 
-- API_TOKEN：API鉴权秘钥
-- COOKIE_DAYS：cookie秘钥，默认7天
+- COOKIE_DAYS：cookie有效期，默认7天
 - GH_TOKEN：API功能必须
 - PASSWORD：登录密码，默认123123
 - RAW_DOMAIN：私库域名
