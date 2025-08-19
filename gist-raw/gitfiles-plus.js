@@ -1,6 +1,6 @@
 // 通用响应构造器
 const jsonResponse = (data, status = 200, headers = {}) => 
-  new Response(JSON.stringify(data), { 
+  new Response(JSON.stringify(data), {
     status, 
     headers: { 'Content-Type': 'application/json', ...headers } 
   });
@@ -789,7 +789,8 @@ const HTML = `<!DOCTYPE html>
       background-color: #eff6ff;
     }
     .form-select {
-      width: 400px;
+      width: 180px;
+      max-width: 300px;
       padding: 0.5rem;
       border: 1px solid #e5e7eb;
       border-radius: 0.5rem;
@@ -805,7 +806,7 @@ const HTML = `<!DOCTYPE html>
     .footer {
       background-color: #1e3a8a;
       color: white;
-      padding: 1rem;
+      padding: 1rem 0;
       position: fixed;
       bottom: 0;
       left: 0;
@@ -858,40 +859,67 @@ const HTML = `<!DOCTYPE html>
 <body class="bg-gray-100">
   <!-- 顶部导航栏 -->
   <nav class="bg-blue-800 shadow">
-    <div class="container mx-auto px-6 py-4">
-      <div class="flex justify-between items-center">
-        <a href="https://github.com/yutian81/cf-github-script/tree/main/gist-raw" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">
+    <div class="container mx-auto px-4 py-3 md:px-6 md:py-4">
+      <!-- 手机端布局 -->
+      <div class="flex flex-col md:hidden space-y-3">
+        <div class="flex flex-row justify-between space-x-3">
+          <a href="https://github.com/yutian81/cf-github-script/tree/main/gist-raw" 
+            class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 flex-1 text-center">
+            <i class="fab fa-github mr-2"></i>项目仓库
+          </a>
+          <a href="/list" 
+            class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 flex-1 text-center">
+            <i class="fas fa-folder-open mr-2"></i>文件管理
+          </a>
+        </div>
+        <h1 class="text-xl font-bold text-white text-center">GitHub 文件服务器</h1>
+      </div>
+
+      <!-- 桌面端布局 -->
+      <div class="hidden md:flex flex-row justify-between items-center">
+        <a href="https://github.com/yutian81/cf-github-script/tree/main/gist-raw" 
+          class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 md:ml-10 lg:ml-40">
           <i class="fab fa-github mr-2"></i>项目仓库
         </a>
         <h1 class="text-2xl font-bold text-white text-center">GitHub 文件服务器</h1>
-        <a href="/list" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"><i class="fas fa-folder-open mr-2"></i>文件管理</a>
+        <a href="/list" 
+          class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 md:mr-10 lg:mr-40">
+          <i class="fas fa-folder-open mr-2"></i>文件管理
+        </a>
       </div>
     </div>
   </nav>
 
   <!-- 主内容区域 -->
-  <div class="container mx-auto px-6 py-8" style="max-width: 1300px;">
+  <div class="container mx-auto px-6 py-8 pb-24" style="max-width: 1000px;">
     <div class="bg-white p-6 rounded-lg shadow-md">
       <!-- 上传类型选择 -->
       <div class="upload-controls">
-        <select id="upload-type" class="form-select">
-          <option value="gist">Gist</option>
-          <option value="github">GitHub</option>
-        </select>
-        <button id="upload-btn" class="ml-4 px-6 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 flex items-center">
-          <i class="fas fa-upload mr-2"></i>上传
-        </button>
-        <div id="progress-container" class="progress-container hidden">
-          <div class="flex justify-between text-sm text-gray-600 mb-1">
-            <span>上传进度</span>
-            <span id="progress-percent">0%</span>
+        <div class="flex flex-col md:flex-row md:items-center gap-2">
+          <!-- 第一行：选择器和上传按钮 -->
+          <div class="flex flex-1 min-w-0">
+            <select id="upload-type" class="form-select flex-1 min-w-0">
+              <option value="gist">Gist</option>
+              <option value="github">GitHub</option>
+            </select>
+            <button id="upload-btn" class="ml-2 md:ml-4 px-4 md:px-6 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 flex items-center shrink-0">
+              <i class="fas fa-upload mr-2"></i>上传
+            </button>
           </div>
-          <div id="progress-bar" class="h-2 bg-gray-200 rounded-full">
-            <div id="progress" class="h-full bg-blue-500 rounded-full transition-all duration-300" style="width: 0%"></div>
+          
+          <!-- 进度条（手机端单独一行，桌面端同行） -->
+          <div id="progress-container" class="progress-container hidden flex-1 min-w-0 md:ml-4">
+            <div class="flex justify-between text-sm text-gray-600 mb-1">
+              <span>上传进度</span>
+              <span id="progress-percent">0%</span>
+            </div>
+            <div id="progress-bar" class="h-2 bg-gray-200 rounded-full w-full">
+              <div id="progress" class="h-full bg-blue-500 rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
           </div>
         </div>
       </div>
-      
+
       <!-- Gist 选项 -->
       <div id="gist-options" class="mt-4">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1164,7 +1192,6 @@ const listHTML = `<!DOCTYPE html>
   <style>
       body { 
         background-color: #f3f4f6; 
-        padding-bottom: 5rem;
       }
       .main-container {
         min-height: calc(100vh - 10rem);
@@ -1312,42 +1339,87 @@ const listHTML = `<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <nav class="nav-container shadow">
-    <div class="container mx-auto px-6 py-4 flex justify-between items-center">
-      <a href="/" class="action-btn action-btn-blue">
-        <i class="fas fa-arrow-left mr-2"></i> 返回首页
-      </a>
-      <h1 class="text-2xl font-bold text-white text-center">文件管理</h1>
-      <div class="relative">
-        <input type="search" id="search-input" placeholder="搜索文件" class="pl-3 pr-10 py-2 w-full border rounded-lg">
-        <i class="fas fa-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+  <nav class="nav-container shadow bg-gray-800">
+    <div class="container mx-auto px-4 py-3 md:px-6 md:py-4">
+      <!-- 手机端布局 -->
+      <div class="flex flex-col md:hidden space-y-3">
+        <div class="flex flex-row items-center justify-between space-x-3">
+          <a href="/" class="action-btn action-btn-blue">
+            <i class="fas fa-arrow-left mr-2"></i> 返回首页
+          </a>
+          <div class="relative flex-1 max-w-[60%]">
+            <input type="search" id="search-input" placeholder="搜索文件" 
+              class="pl-3 pr-10 py-2 w-full border rounded-lg text-sm">
+            <i class="fas fa-search absolute mr-2 right-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+          </div>
+        </div>
+        <h1 class="text-xl font-bold text-white text-center">文件管理</h1>
+      </div>
+
+      <!-- 桌面端布局 -->
+      <div class="hidden md:flex flex-row justify-between items-center">
+        <a href="/" class="action-btn action-btn-blue md:ml-10 lg:ml-40">
+          <i class="fas fa-arrow-left mr-2"></i> 返回首页
+        </a>
+        <h1 class="text-2xl font-bold text-white text-center">文件管理</h1>
+        <div class="relative md:mr-10 lg:mr-40">
+          <input type="search" id="search-input" placeholder="搜索文件" 
+            class="pl-3 pr-10 py-2 w-full border rounded-lg text-base">
+          <i class="fas fa-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+        </div>
       </div>
     </div>
   </nav>
 
-  <main class="container mx-auto px-6 py-8 max-w-6xl main-container">
+  <main class="container mx-auto px-6 py-8 pb-24 max-w-6xl main-container">
     <div class="bg-white p-6 rounded-lg shadow-md">
       <div class="button-group">
-        <div class="left-buttons">
-          <button id="select-all" class="action-btn action-btn-blue">
-            <i class="fas fa-check-square mr-2"></i>全选
-          </button>
-          <button id="select-reverse" class="action-btn action-btn-blue">
-            <i class="fas fa-exchange-alt mr-2"></i>反选
-          </button>
-        </div>
-        <div class="right-buttons">
-          <button id="delete-records" class="action-btn action-btn-red">
-            <i class="fas fa-trash-alt mr-2"></i>删除记录
-          </button>
-          <button id="delete-files" class="action-btn action-btn-red">
-            <i class="fas fa-trash-alt mr-2"></i>删除文件
-          </button>
-          <button id="copy-urls" class="action-btn action-btn-blue">
+        <!-- 手机端布局 -->
+        <div class="flex flex-col md:hidden gap-2">
+          <div class="flex flex-row gap-2">
+            <button id="select-all" class="action-btn action-btn-blue flex-1 min-w-0 text-center">
+              <i class="fas fa-check-square mr-2"></i>全选
+            </button>
+            <button id="select-reverse" class="action-btn action-btn-blue flex-1 min-w-0 text-center">
+              <i class="fas fa-exchange-alt mr-2"></i>反选
+            </button>
+          </div>
+          <div class="flex flex-row justify-end gap-2">
+            <button id="delete-records" class="action-btn action-btn-red flex-1 min-w-0 text-center">
+              <i class="fas fa-trash-alt mr-2"></i>删除记录
+            </button>
+            <button id="delete-files" class="action-btn action-btn-red flex-1 min-w-0 text-center">
+              <i class="fas fa-trash-alt mr-2"></i>删除文件
+            </button>
+          </div>
+          <button id="copy-urls" class="action-btn action-btn-blue w-full flex justify-center">
             <i class="fas fa-copy mr-2"></i>复制直链
           </button>
         </div>
-      </div>
+      
+        <!-- 桌面端布局（保持原样） -->
+        <div class="hidden md:flex flex-row justify-between gap-2">
+          <div class="flex flex-row gap-2">
+            <button id="select-all" class="action-btn action-btn-blue">
+              <i class="fas fa-check-square mr-2"></i>全选
+            </button>
+            <button id="select-reverse" class="action-btn action-btn-blue">
+              <i class="fas fa-exchange-alt mr-2"></i>反选
+            </button>
+          </div>
+          <div class="flex flex-row gap-2">
+            <button id="delete-records" class="action-btn action-btn-red">
+              <i class="fas fa-trash-alt mr-2"></i>删除记录
+            </button>
+            <button id="delete-files" class="action-btn action-btn-red">
+              <i class="fas fa-trash-alt mr-2"></i>删除文件
+            </button>
+            <button id="copy-urls" class="action-btn action-btn-blue">
+              <i class="fas fa-copy mr-2"></i>复制直链
+            </button>
+          </div>
+        </div>
+      </div>  
 
       <div id="delete-progress-container" class="hidden mt-4">
         <div class="flex justify-between text-sm text-gray-600 mb-1">
