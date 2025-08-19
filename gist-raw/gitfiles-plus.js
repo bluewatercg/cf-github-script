@@ -806,7 +806,7 @@ const HTML = `<!DOCTYPE html>
     .footer {
       background-color: #1e3a8a;
       color: white;
-      padding: 1rem 0;
+      padding: 1rem;
       position: fixed;
       bottom: 0;
       left: 0;
@@ -1694,3 +1694,4 @@ const listHTML = `<!DOCTYPE html>
   </script>
 </body>
 </html>`;
+
