@@ -82,9 +82,10 @@ async function buildDirectUrl(uploadType, username, idORrepo, branch, path, file
   if (uploadType === 'gist') {
     return `https://gist.githubusercontent.com/${username}/${idORrepo}/raw/${filename}`;
   }
+  const rawToken = env.RAW_TOEKN;
   const isPrivate = await checkRepoIsPrivate(username, idORrepo, env, event, request);
   return isPrivate && env.RAW_DOMAIN
-    ? `https://${env.RAW_DOMAIN}/${idORrepo}/${branch}/${filePath}?token=yutian88881`
+    ? `https://${env.RAW_DOMAIN}/${idORrepo}/${branch}/${filePath}?token=${rawToken}`
     : `https://github.com/${username}/${idORrepo}/raw/${branch}/${filePath}`;
 }
 
@@ -1694,4 +1695,5 @@ const listHTML = `<!DOCTYPE html>
   </script>
 </body>
 </html>`;
+
 
