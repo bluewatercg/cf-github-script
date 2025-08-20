@@ -846,13 +846,7 @@ const HTML = `<!DOCTYPE html>
       font-weight: 500;
       color: #374151;
     }
-    .progress-container {
-      flex-grow: 1;
-      margin-left: 1rem;
-    }
     .upload-controls {
-      display: flex;
-      align-items: center;
       margin-bottom: 1rem;
     }
   </style>
@@ -895,11 +889,11 @@ const HTML = `<!DOCTYPE html>
   <div class="container mx-auto px-6 py-8 pb-24" style="max-width: 1000px;">
     <div class="bg-white p-6 rounded-lg shadow-md">
       <!-- 上传类型选择 -->
-      <div class="upload-controls">
-        <div class="flex flex-col md:flex-row md:items-center gap-2">
-          <!-- 第一行：选择器和上传按钮 -->
-          <div class="flex flex-1 min-w-0">
-            <select id="upload-type" class="form-select flex-1 min-w-0">
+      <div class="upload-controls w-full">
+        <div class="flex flex-col md:flex-row md:items-center gap-2 w-full">
+          <!-- 上传选择区 -->
+          <div class="flex-none flex items-center">
+            <select id="upload-type" class="form-select">
               <option value="gist">Gist</option>
               <option value="github">GitHub</option>
             </select>
@@ -908,7 +902,7 @@ const HTML = `<!DOCTYPE html>
             </button>
           </div>
           
-          <!-- 进度条（手机端单独一行，桌面端同行） -->
+          <!-- 进度条：桌面端占满剩余空间 -->
           <div id="progress-container" class="progress-container hidden flex-1 min-w-0 md:ml-4">
             <div class="flex justify-between text-sm text-gray-600 mb-1">
               <span>上传进度</span>
@@ -961,15 +955,15 @@ const HTML = `<!DOCTYPE html>
       </div>
       <!-- 上传结果展示区 -->
       <div id="upload-results" class="mt-6 hidden">
-        <div class="result-table border rounded-lg overflow-hidden">
+        <div class="result-table border rounded-lg overflow-hidden overflow-x-auto">
           <table class="min-w-full">
             <thead class="bg-gray-100">
               <tr>
-                <th class="px-4 py-2 text-left">文件名</th>
-                <th class="px-4 py-2 text-left">文件大小</th>
-                <th class="px-4 py-2 text-left">上传时间</th>
-                <th class="px-4 py-2 text-left">页面地址</th>
-                <th class="px-4 py-2 text-left">直链地址</th>
+                <th class="px-4 py-2 text-left whitespace-nowrap">文件名</th>
+                <th class="px-4 py-2 text-left whitespace-nowrap">文件大小</th>
+                <th class="px-4 py-2 text-left whitespace-nowrap">上传时间</th>
+                <th class="px-4 py-2 text-left whitespace-nowrap">页面地址</th>
+                <th class="px-4 py-2 text-left whitespace-nowrap">直链地址</th>
               </tr>
             </thead>
             <tbody id="result-body" class="divide-y divide-gray-200"></tbody>
@@ -1378,22 +1372,22 @@ const listHTML = `<!DOCTYPE html>
         <!-- 手机端布局 -->
         <div class="flex flex-col md:hidden gap-2">
           <div class="flex flex-row gap-2">
-            <button id="select-all" class="action-btn action-btn-blue flex-1 min-w-0 text-center">
+            <button class="select-all action-btn action-btn-blue flex-1 min-w-0 flex justify-center">
               <i class="fas fa-check-square mr-2"></i>全选
             </button>
-            <button id="select-reverse" class="action-btn action-btn-blue flex-1 min-w-0 text-center">
+            <button class="select-reverse action-btn action-btn-blue flex-1 min-w-0 flex justify-center">
               <i class="fas fa-exchange-alt mr-2"></i>反选
             </button>
           </div>
           <div class="flex flex-row justify-end gap-2">
-            <button id="delete-records" class="action-btn action-btn-red flex-1 min-w-0 text-center">
+            <button class="delete-records action-btn action-btn-red flex-1 min-w-0 flex justify-center">
               <i class="fas fa-trash-alt mr-2"></i>删除记录
             </button>
-            <button id="delete-files" class="action-btn action-btn-red flex-1 min-w-0 text-center">
+            <button class="delete-files action-btn action-btn-red flex-1 min-w-0 flex justify-center">
               <i class="fas fa-trash-alt mr-2"></i>删除文件
             </button>
           </div>
-          <button id="copy-urls" class="action-btn action-btn-blue w-full flex justify-center">
+          <button class="copy-urls action-btn action-btn-blue w-full flex justify-center">
             <i class="fas fa-copy mr-2"></i>复制直链
           </button>
         </div>
@@ -1401,21 +1395,21 @@ const listHTML = `<!DOCTYPE html>
         <!-- 桌面端布局（保持原样） -->
         <div class="hidden md:flex flex-row justify-between gap-2">
           <div class="flex flex-row gap-2">
-            <button id="select-all" class="action-btn action-btn-blue">
+            <button class="select-all action-btn action-btn-blue">
               <i class="fas fa-check-square mr-2"></i>全选
             </button>
-            <button id="select-reverse" class="action-btn action-btn-blue">
+            <button class="select-reverse action-btn action-btn-blue">
               <i class="fas fa-exchange-alt mr-2"></i>反选
             </button>
           </div>
           <div class="flex flex-row gap-2">
-            <button id="delete-records" class="action-btn action-btn-red">
+            <button class="delete-records action-btn action-btn-red">
               <i class="fas fa-trash-alt mr-2"></i>删除记录
             </button>
-            <button id="delete-files" class="action-btn action-btn-red">
+            <button class="delete-files action-btn action-btn-red">
               <i class="fas fa-trash-alt mr-2"></i>删除文件
             </button>
-            <button id="copy-urls" class="action-btn action-btn-blue">
+            <button class="copy-urls action-btn action-btn-blue">
               <i class="fas fa-copy mr-2"></i>复制直链
             </button>
           </div>
@@ -1553,17 +1547,21 @@ const listHTML = `<!DOCTYPE html>
     });
 
     // 全选功能
-    document.getElementById('select-all').addEventListener('click', function() {
+    document.querySelectorAll('.select-all').forEach(btn => {
+      btn.addEventListener('click', function() {
         const checkboxes = document.querySelectorAll('.form-checkbox[data-id]');
         checkboxes.forEach(checkbox => checkbox.checked = true);
         updateHeaderCheckbox();
+      });
     });
 
     // 反选功能
-    document.getElementById('select-reverse').addEventListener('click', function() {
+    document.querySelectorAll('.select-reverse').forEach(btn => {
+      btn.addEventListener('click', function() {
         const checkboxes = document.querySelectorAll('.form-checkbox[data-id]');
         checkboxes.forEach(checkbox => checkbox.checked = !checkbox.checked);
         updateHeaderCheckbox();
+      });
     });
 
     // 初始化时绑定数据行复选框事件
@@ -1573,127 +1571,131 @@ const listHTML = `<!DOCTYPE html>
         });
     }
 
-  function getSelectedIds() {
-    return Array.from(document.querySelectorAll('.form-checkbox[data-id]:checked'))
-      .map(checkbox => checkbox.dataset.id)
-      .filter(id => id && !isNaN(id));
-  }
+    function getSelectedIds() {
+      return Array.from(document.querySelectorAll('.form-checkbox[data-id]:checked'))
+        .map(checkbox => checkbox.dataset.id)
+        .filter(id => id && !isNaN(id));
+    }
 
     // 删除记录（带进度条）
-    document.getElementById('delete-records').addEventListener('click', async function () {
-      const ids = getSelectedIds();
-      if (ids.length === 0) return alert('请选择要删除的记录');
-      if (!confirm(\`确定要删除 \${ids.length} 条记录吗？\`)) return;
-      const btn = this;
-      const progressContainer = document.getElementById('delete-progress-container');
-      const progressBar = document.getElementById('delete-progress');
-      const progressText = document.getElementById('delete-progress-percent');
-      btn.disabled = true;
-      progressContainer.classList.remove('hidden');
-      progressBar.style.width = '0%';
-      progressText.textContent = '0%';
-      let successCount = 0;
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      for (let i = 0; i < ids.length; i++) {
-        const id = ids[i];
-        try {
-          const res = await fetch(\`/api/rec/\${id}\`, { method: 'DELETE' });
-          const result = await res.json();
-          if (res.ok && result.success_count > 0) successCount++;
-        } catch (err) {
-          console.error(\`删除记录失败 [ID: \${id}]\`, err);
-        }
-        const percent = Math.round(((i + 1) * 100) / ids.length);
-        progressBar.style.width = \`\${percent}%\`;
-        progressText.textContent = \`\${percent}%\`;
-        await new Promise(resolve => requestAnimationFrame(resolve));
-      }
-      progressBar.style.width = '100%';
-      progressText.textContent = '100%';
-      await new Promise(resolve => setTimeout(resolve, 300)); // 保持100%状态300ms
-      setTimeout(() => {
-        progressContainer.classList.add('hidden');
+    document.querySelectorAll('.delete-records').forEach(btn => {
+      btn.addEventListener('click', async function() {
+        const ids = getSelectedIds();
+        if (ids.length === 0) return alert('请选择要删除的记录');
+        if (!confirm(\`确定要删除 \${ids.length} 条记录吗？\`)) return;
+        const btn = this;
+        const progressContainer = document.getElementById('delete-progress-container');
+        const progressBar = document.getElementById('delete-progress');
+        const progressText = document.getElementById('delete-progress-percent');
+        btn.disabled = true;
+        progressContainer.classList.remove('hidden');
         progressBar.style.width = '0%';
         progressText.textContent = '0%';
-      }, 800);
-      btn.disabled = false;
-      alert(\`成功删除 \${successCount}/\${ids.length} 条记录\`);
-      loadPaginatedFiles(currentPage);
+        let successCount = 0;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        for (let i = 0; i < ids.length; i++) {
+          const id = ids[i];
+          try {
+            const res = await fetch(\`/api/rec/\${id}\`, { method: 'DELETE' });
+            const result = await res.json();
+            if (res.ok && result.success_count > 0) successCount++;
+          } catch (err) {
+            console.error(\`删除记录失败 [ID: \${id}]\`, err);
+          }
+          const percent = Math.round(((i + 1) * 100) / ids.length);
+          progressBar.style.width = \`\${percent}%\`;
+          progressText.textContent = \`\${percent}%\`;
+          await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+        progressBar.style.width = '100%';
+        progressText.textContent = '100%';
+        await new Promise(resolve => setTimeout(resolve, 300)); // 保持100%状态300ms
+        setTimeout(() => {
+          progressContainer.classList.add('hidden');
+          progressBar.style.width = '0%';
+          progressText.textContent = '0%';
+        }, 800);
+        btn.disabled = false;
+        alert(\`成功删除 \${successCount}/\${ids.length} 条记录\`);
+        loadPaginatedFiles(currentPage);
+      });
     });
 
     // 批量删除文件（带进度条）
-    document.getElementById('delete-files').addEventListener('click', async function () {
-      const ids = getSelectedIds();
-      if (!ids.length) return alert('请选择要删除的文件');
-      if (!confirm(\`即将永久删除 \${ids.length} 个文件 (不可逆)，确定继续？\`)) return;
-      const btn = this;
-      const progressContainer = document.getElementById('delete-progress-container');
-      const progressBar = document.getElementById('delete-progress');
-      const progressText = document.getElementById('delete-progress-percent');
-      btn.disabled = true;
-      progressContainer.classList.remove('hidden');
-      progressBar.style.width = '0%';
-      progressText.textContent = '0%';
-      let successCount = 0;
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      for (let i = 0; i < ids.length; i++) {
-        const id = ids[i];
-        try {
-          const res = await fetch(\`/api/del/\${id}\`, { method: 'DELETE' });
-          const result = await res.json();
-          if (res.ok && result.success_count > 0) successCount++;
-        } catch (err) {
-          console.error(\`删除失败 [ID: \${id}]\`, err);
-        }
-        const percent = Math.round(((i + 1) * 100) / ids.length);
-        progressBar.style.width = \`\${percent}%\`;
-        progressText.textContent = \`\${percent}%\`;
-        await new Promise(resolve => requestAnimationFrame(resolve));
-      }
-      progressBar.style.width = '100%';
-      progressText.textContent = '100%';
-      await new Promise(resolve => setTimeout(resolve, 300));
-      setTimeout(() => {
-        progressContainer.classList.add('hidden');
+    document.querySelectorAll('.delete-files').forEach(btn => {
+      btn.addEventListener('click', async function() {
+        const ids = getSelectedIds();
+        if (!ids.length) return alert('请选择要删除的文件');
+        if (!confirm(\`即将永久删除 \${ids.length} 个文件 (不可逆)，确定继续？\`)) return;
+        const btn = this;
+        const progressContainer = document.getElementById('delete-progress-container');
+        const progressBar = document.getElementById('delete-progress');
+        const progressText = document.getElementById('delete-progress-percent');
+        btn.disabled = true;
+        progressContainer.classList.remove('hidden');
         progressBar.style.width = '0%';
         progressText.textContent = '0%';
-      }, 800);
-      btn.disabled = false;
-      alert(\`成功删除 \${successCount}/\${ids.length} 个文件\`);
-      loadPaginatedFiles(currentPage);
+        let successCount = 0;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        for (let i = 0; i < ids.length; i++) {
+          const id = ids[i];
+          try {
+            const res = await fetch(\`/api/del/\${id}\`, { method: 'DELETE' });
+            const result = await res.json();
+            if (res.ok && result.success_count > 0) successCount++;
+          } catch (err) {
+            console.error(\`删除失败 [ID: \${id}]\`, err);
+          }
+          const percent = Math.round(((i + 1) * 100) / ids.length);
+          progressBar.style.width = \`\${percent}%\`;
+          progressText.textContent = \`\${percent}%\`;
+          await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+        progressBar.style.width = '100%';
+        progressText.textContent = '100%';
+        await new Promise(resolve => setTimeout(resolve, 300));
+        setTimeout(() => {
+          progressContainer.classList.add('hidden');
+          progressBar.style.width = '0%';
+          progressText.textContent = '0%';
+        }, 800);
+        btn.disabled = false;
+        alert(\`成功删除 \${successCount}/\${ids.length} 个文件\`);
+        loadPaginatedFiles(currentPage);
+      });
     });
 
     // 批量复制直链
-    document.getElementById('copy-urls').addEventListener('click', async function() {
-      const btn = this;
-      const selectedCheckboxes = document.querySelectorAll('.form-checkbox:checked');
-      const urls = [];
-      
-      selectedCheckboxes.forEach(checkbox => {
-        if (checkbox.id === 'select-all-check') return;
-        const row = checkbox.closest('tr');
-        const directUrl = row.querySelector('td:nth-child(8) a').href;
-        urls.push(directUrl);
+    document.querySelectorAll('.copy-urls').forEach(btn => {
+      btn.addEventListener('click', async function() {
+        const btn = this;
+        const selectedCheckboxes = document.querySelectorAll('.form-checkbox:checked');
+        const urls = [];
+        
+        selectedCheckboxes.forEach(checkbox => {
+          if (checkbox.id === 'select-all-check') return;
+          const row = checkbox.closest('tr');
+          const directUrl = row.querySelector('td:nth-child(8) a').href;
+          urls.push(directUrl);
+        });
+        if (urls.length === 0) { alert('请选择要复制的文件'); return; }
+        
+        try {
+          await navigator.clipboard.writeText(urls.join('\\n'));
+          const originalHTML = btn.innerHTML;
+          btn.innerHTML = '<i class="fas fa-check mr-2"></i>已复制';
+          btn.classList.add('cursor-not-allowed', 'opacity-75');
+          alert(\`成功复制 \${urls.length} 个直链\`);
+          setTimeout(() => {
+            btn.innerHTML = originalHTML;
+            btn.classList.remove('cursor-not-allowed', 'opacity-75');
+          }, 2000);
+        } catch (err) {
+          console.error('复制失败:', err);
+          alert('复制失败，请手动复制链接');
+        }
       });
-      if (urls.length === 0) { alert('请选择要复制的文件'); return; }
-      
-      try {
-        await navigator.clipboard.writeText(urls.join('\\n'));
-        const originalHTML = btn.innerHTML;
-        btn.innerHTML = '<i class="fas fa-check mr-2"></i>已复制';
-        btn.classList.add('cursor-not-allowed', 'opacity-75');
-        alert(\`成功复制 \${urls.length} 个直链\`);
-        setTimeout(() => {
-          btn.innerHTML = originalHTML;
-          btn.classList.remove('cursor-not-allowed', 'opacity-75');
-        }, 2000);
-      } catch (err) {
-        console.error('复制失败:', err);
-        alert('复制失败，请手动复制链接');
-      }
     });
   </script>
 </body>
 </html>`;
-
-
