@@ -744,7 +744,7 @@ function headLinks() {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>" type="image/svg+xml">
-    <link href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   `;
 }
@@ -805,7 +805,7 @@ const HTML = `<!DOCTYPE html>
       width: 100%;
     }
     .footer {
-      background-color: #1e3a8a;
+      background-color: #1e40af;
       color: white;
       padding: 1rem;
       position: fixed;
@@ -1284,7 +1284,7 @@ const listHTML = `<!DOCTYPE html>
         background-color: #1e40af;
       }
       .footer {
-        background-color: #1e3a8a;
+        background-color: #1e40af;
         color: white;
         padding: 1rem;
         position: fixed;
@@ -1334,7 +1334,7 @@ const listHTML = `<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <nav class="nav-container shadow bg-gray-800">
+  <nav class="nav-container shadow bg-blue-800">
     <div class="container mx-auto px-4 py-3 md:px-6 md:py-4">
       <!-- 手机端布局 -->
       <div class="flex flex-col md:hidden space-y-3">
