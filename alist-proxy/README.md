@@ -10,3 +10,7 @@
 > **📌 提示**
 > 
 > AList API Token 获取方法：`AList 管理 → 设置 → 其他 → 令牌`，生成后务必保存！
+
+## 完整教程
+
+https://blog.811520.xyz/post/2025/08/250827-alist-proxy/
