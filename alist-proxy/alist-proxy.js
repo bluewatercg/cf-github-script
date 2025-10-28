@@ -108,16 +108,16 @@ async function handleDownload(request) {
   }
 
   let fetchOptions = { redirect: 'manual'};
-  request = new Request(res.data.url, request);
+  let proxyRequest = new Request(res.data.url, request); // 继承客户端 headers
   if (res.data.header) {
     for (const k in res.data.header) {
       for (const v of res.data.header[k]) {
-        request.headers.set(k, v);
+        proxyRequest.headers.set(k, v);
       }
     }
   }
 
-  let response = await fetch(request, fetchOptions);
+  let response = await fetch(proxyRequest, fetchOptions);
   let redirectCount = 0;
     const MAX_REDIRECTS = 3; // 设置最大重定向次数，防止无限循环
     while (response.status >= 300 && response.status < 400 && redirectCount < MAX_REDIRECTS) {
@@ -125,11 +125,11 @@ async function handleDownload(request) {
     const location = response.headers.get("Location");
     if (location) {
       if (location.startsWith(`${WORKER_ADDRESS}/`)) {
-        request = new Request(location, request);
-        return await handleRequest(request);
+        const redirectRequest = new Request(location, request);
+        return await handleRequest(redirectRequest);
       } else {
-        request = new Request(location, request);
-        response = await fetch(request, fetchOptions);
+        proxyRequest = new Request(location, proxyRequest);
+        response = await fetch(proxyRequest, fetchOptions);
       }
     } else { break; }
   }
