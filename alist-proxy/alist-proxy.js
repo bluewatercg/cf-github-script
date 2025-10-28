@@ -3,14 +3,10 @@ let ADDRESS, TOKEN, WORKER_ADDRESS, DISABLE_SIGN;
 
 // 从环境变量初始化常量
 function initConstants(env) {
-  // OpenList 后端服务器地址 (不要包含尾随斜杠)
-  ADDRESS = env.ADDRESS || "YOUR_ADDRESS";
-  // OpenList 服务器的 API 访问令牌 (密钥)
-  TOKEN = env.TOKEN || "YOUR_TOKEN";
-  // Cloudflare Worker 的完整地址
-  WORKER_ADDRESS = env.WORKER_ADDRESS || "YOUR_WORKER_ADDRESS";
-  // 是否禁用签名验证 (推荐设置为 false)
-  // 隐私警告：关闭签名会造成文件可被任何知晓路径的人获取
+  ADDRESS = env.ADDRESS || "YOUR_ADDRESS"; // OpenList 后端服务器地址 (不要包含尾随斜杠)
+  TOKEN = env.TOKEN || "YOUR_TOKEN"; // OpenList 服务器的 API 访问令牌 (密钥)
+  WORKER_ADDRESS = env.WORKER_ADDRESS || "YOUR_WORKER_ADDRESS";  // Cloudflare Worker 的完整地址
+  // 是否禁用签名验证 (推荐设置为 false)。关闭签名会造成文件可被任何知晓路径的人获取
   DISABLE_SIGN =
     env.DISABLE_SIGN === "true" || env.DISABLE_SIGN === true || false;
 }
@@ -110,6 +106,8 @@ async function handleDownload(request) {
   if (res.code !== 200) {
     return new Response(JSON.stringify(res));
   }
+
+  let fetchOptions = { redirect: 'manual'};
   request = new Request(res.data.url, request);
   if (res.data.header) {
     for (const k in res.data.header) {
@@ -119,8 +117,11 @@ async function handleDownload(request) {
     }
   }
 
-  let response = await fetch(request);
-  while (response.status >= 300 && response.status < 400) {
+  let response = await fetch(request, fetchOptions);
+  let redirectCount = 0;
+    const MAX_REDIRECTS = 3; // 设置最大重定向次数，防止无限循环
+    while (response.status >= 300 && response.status < 400 && redirectCount < MAX_REDIRECTS) {
+          redirectCount++;
     const location = response.headers.get("Location");
     if (location) {
       if (location.startsWith(`${WORKER_ADDRESS}/`)) {
@@ -128,32 +129,30 @@ async function handleDownload(request) {
         return await handleRequest(request);
       } else {
         request = new Request(location, request);
-        response = await fetch(request);
+        response = await fetch(request, fetchOptions);
       }
-    } else {
-      break;
-    }
+    } else { break; }
   }
+
+  // 如果最终状态不是 200，或者重定向过多，直接返回错误或响应
+  if (response.status !== 200) {
+    return response; 
+  }
+
   response = new Response(response.body, response);
 
   // ====================== 浏览器预览而不下载 start ======================
-  // 1. 修正 Content-Disposition
-  const contentDisposition = response.headers.get("Content-Disposition");
-  if (contentDisposition && contentDisposition.startsWith("attachment")) {
-    const newContentDisposition = contentDisposition.replace(/^attachment/, "inline");
-    response.headers.set("Content-Disposition", newContentDisposition);
+  const filename = path.substring(path.lastIndexOf('/') + 1);
+  response.headers.set("Content-Disposition", `inline; filename="${filename}"`);
+  const correctMimeType = getMimeType(path);
+  if (correctMimeType) {
+    response.headers.set("Content-Type", correctMimeType);
   }
-
-  // 2. 修正 Content-Type
-  const contentType = response.headers.get("Content-Type");
-  if (contentType && contentType.includes("application/octet-stream")) {
-    const correctMimeType = getMimeType(path);
-    if (correctMimeType) {
-      response.headers.set("Content-Type", correctMimeType);
-    }
-  }
+  response.headers.delete("X-Content-Type-Options");
   // ====================== 浏览器预览而不下载 END ========================
 
+  response.headers.delete("Location"); 
+  response.headers.delete("Refresh");  
   response.headers.delete("set-cookie");
   response.headers.set("Access-Control-Allow-Origin", origin);
   response.headers.append("Vary", "Origin");
