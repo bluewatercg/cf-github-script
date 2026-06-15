@@ -3,8 +3,8 @@ addEventListener('fetch', event => {
 })
 
 async function handleRequest(request) {
-  // ✅ 使用你的Pages默认地址
-  const targetBase = 'https://your-project.pages.dev'
+  // ✅ 填入需要反代的地址
+  const targetBase = 'https://warm-codi-yuzong20-102e921b.koyeb.app'
 
   if (request.headers.get('Upgrade') === 'websocket') {
     return fetch(request)
