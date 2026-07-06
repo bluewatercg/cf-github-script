@@ -1,39 +1,33 @@
-// ================= 配置区域 =================
+// ================= 配置区域（硬编码默认值） =================
+// 这些配置可以被 Cloudflare Dashboard 的环境变量覆盖，
+// 详见同目录下的 配置说明.md
 
-// 屏蔽的国家/地区代码（ISO 3166-1 alpha-2），空数组表示不屏蔽
-// 例如：["KP", "SY", "PK", "CU"]
-const blocked_region = [];
+// 屏蔽的国家/地区代码（ISO 3166-1 alpha-2）
+const DEFAULT_BLOCKED_REGION = [];
 
-// 屏蔽的 IP 地址，空数组表示不屏蔽
-const blocked_ip_address = [];
+// 屏蔽的 IP 地址
+const DEFAULT_BLOCKED_IP_ADDRESS = [];
 
 // 自定义文本替换规则（在 HTML 中额外替换指定文本）
-// 支持占位符：
-//   $upstream      = 目标域名（如 example.com）
-//   $custom_domain = 当前 Worker 域名
-// 例如：{ "$upstream": "$custom_domain", "旧文本": "新文本" }
-const replace_dict = {};
+// 支持占位符：$upstream = 目标域名, $custom_domain = 当前 Worker 域名
+const DEFAULT_REPLACE_DICT = {};
 
 // 动态请求头规则：按域名配置对请求头的处理方式
-//   "KEEP"   = 保留原始值（不覆盖）
-//   "DELETE" = 删除该请求头
-//   其他字符串 = 设置为该值
-//   "*"      = 通配规则，所有域名均生效（优先级低于具体域名规则）
-const specialCases = {
-  // 示例：对所有域名生效
-  // "*": {
-  //   "Origin": "DELETE",
-  //   "Referer": "DELETE",
-  // },
-  // 示例：仅对 example.com 生效
-  // "example.com": {
-  //   "X-Custom-Header": "my-value",
-  // },
-};
-// ============================================
+//   "KEEP"   = 保留原始值  "DELETE" = 删除  其他字符串 = 设置为该值
+const DEFAULT_SPECIAL_CASES = {};
+// ============================================================
 
 export default {
   async fetch(request, env, ctx) {
+    // ================= 从环境变量读取配置（覆盖默认值） =================
+    const config = {
+      blocked_region:     getEnvArray(env, 'BLOCKED_REGION')     ?? DEFAULT_BLOCKED_REGION,
+      blocked_ip_address: getEnvArray(env, 'BLOCKED_IP_ADDRESS') ?? DEFAULT_BLOCKED_IP_ADDRESS,
+      replace_dict:       getEnvObject(env, 'REPLACE_DICT')      ?? DEFAULT_REPLACE_DICT,
+      specialCases:       getEnvObject(env, 'SPECIAL_CASES')     ?? DEFAULT_SPECIAL_CASES,
+    };
+    // ===================================================================
+
     const url = new URL(request.url);
     const workerDomain = url.host;
 
@@ -41,13 +35,13 @@ export default {
     const region = request.headers.get("cf-ipcountry") || "";
     const ipAddress = request.headers.get("cf-connecting-ip") || "";
 
-    if (blocked_region.length > 0 && blocked_region.includes(region.toUpperCase())) {
+    if (config.blocked_region.length > 0 && config.blocked_region.includes(region.toUpperCase())) {
       return new Response("Access denied: This service is not available in your region.", {
         status: 403,
       });
     }
 
-    if (blocked_ip_address.length > 0 && blocked_ip_address.includes(ipAddress)) {
+    if (config.blocked_ip_address.length > 0 && config.blocked_ip_address.includes(ipAddress)) {
       return new Response("Access denied: Your IP address is blocked.", {
         status: 403,
       });
@@ -119,10 +113,6 @@ export default {
     // ==========================================================
 
     // ================= 3. 从路径中提取目标 URL =================
-    // 支持三种格式：
-    //   /https://example.com/path   → https://example.com/path
-    //   /http://example.com/path    → http://example.com/path
-    //   /example.com/path           → https://example.com/path
     const rawPath = url.pathname.slice(1);
 
     let targetUrlStr;
@@ -139,7 +129,6 @@ export default {
       targetUrlStr = 'https://' + rawPath;
     }
 
-    // search 和 hash
     const targetUrl = new URL(targetUrlStr + url.search + url.hash);
     const proxyPath = '/' + targetUrlStr;
     // ============================================================
@@ -154,8 +143,8 @@ export default {
     newHeaders.delete("cf-ray");
     newHeaders.delete("cf-visitor");
 
-    // specialCases 动态头规则
-    applySpecialCases(newHeaders, targetUrl.host);
+    // 应用 specialCases 动态头规则
+    applySpecialCases(newHeaders, targetUrl.host, config.specialCases);
     // ============================================================
 
     // ================= 5. WebSocket 代理 =================
@@ -174,7 +163,7 @@ export default {
       });
 
       // ================= 7. 处理响应头 =================
-      let modifiedHeaders = buildModifiedHeaders(response, workerDomain, targetUrl);
+      let modifiedHeaders = buildModifiedHeaders(response);
       // =================================================
 
       // ================= 8. 重定向拦截 =================
@@ -214,7 +203,7 @@ export default {
 
       if (contentType.includes('text/html')) {
         const text = await response.text();
-        const rewrittenText = rewriteHtml(text, targetUrl, proxyPath, workerDomain);
+        const rewrittenText = rewriteHtml(text, targetUrl, proxyPath, workerDomain, config.replace_dict);
         return new Response(rewrittenText, {
           status: response.status,
           statusText: response.statusText,
@@ -240,14 +229,39 @@ export default {
 
 // ================= 辅助函数 =================
 
+// --- 从环境变量读取数组 ---
+// 支持 JSON 数组格式: ["KP","SY"]
+// 也支持逗号分隔: KP,SY
+function getEnvArray(env, key) {
+  if (!env || !env[key]) return undefined;
+  try {
+    const parsed = JSON.parse(env[key]);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return env[key].split(',').map(s => s.trim()).filter(Boolean);
+  }
+}
+
+// --- 从环境变量读取对象/字典 ---
+// 必须使用 JSON 格式: {"key":"value"}
+function getEnvObject(env, key) {
+  if (!env || !env[key]) return undefined;
+  try {
+    return JSON.parse(env[key]);
+  } catch {
+    return undefined;
+  }
+}
+
 // --- 处理响应头 ---
-function buildModifiedHeaders(response, workerDomain, targetUrl) {
+function buildModifiedHeaders(response) {
   const modifiedHeaders = new Headers();
 
   for (const [key, value] of response.headers.entries()) {
     const lowerKey = key.toLowerCase();
 
-    if (lowerKey === 'content-security-policy' || lowerKey === 'content-security-policy-report-only') {
+    if (lowerKey === 'content-security-policy' ||
+        lowerKey === 'content-security-policy-report-only') {
       continue;
     }
 
@@ -288,14 +302,14 @@ async function handleWebSocket(targetUrl) {
 }
 
 // --- specialCases 动态头规则 ---
-function applySpecialCases(headers, hostname) {
+function applySpecialCases(headers, hostname, rules) {
   // 先应用通配规则 *
-  if (specialCases["*"]) {
-    applyRules(headers, specialCases["*"]);
+  if (rules["*"]) {
+    applyRules(headers, rules["*"]);
   }
   // 再应用具体域名规则（覆盖通配）
-  if (specialCases[hostname]) {
-    applyRules(headers, specialCases[hostname]);
+  if (rules[hostname]) {
+    applyRules(headers, rules[hostname]);
   }
 }
 
@@ -303,7 +317,7 @@ function applyRules(headers, rules) {
   for (const [key, value] of Object.entries(rules)) {
     switch (value) {
       case "KEEP":
-        break; // 不做任何操作，保留原始值
+        break;
       case "DELETE":
         headers.delete(key);
         break;
@@ -315,11 +329,11 @@ function applyRules(headers, rules) {
 }
 
 // --- HTML 重写 ---
-function rewriteHtml(text, targetUrl, proxyPath, workerDomain) {
+function rewriteHtml(text, targetUrl, proxyPath, workerDomain, replaceDict) {
   const escapedOrigin = targetUrl.origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
   let result = text
-    // a) 重写绝对 URL（href、src、action、srcset、formaction）
+    // a) 重写绝对 URL
     .replace(
       new RegExp(`((?:href|src|action|srcset|formaction)=["'])${escapedOrigin}`, 'gi'),
       `$1${proxyPath}`
@@ -329,7 +343,7 @@ function rewriteHtml(text, targetUrl, proxyPath, workerDomain) {
       new RegExp(`(url\\(["']?)${escapedOrigin}`, 'gi'),
       `$1${proxyPath}`
     )
-    // c) 重写根相对路径（/path → /https:/example.com/path）
+    // c) 重写根相对路径
     .replace(
       /(<(?:a|base|form|img|link|script|video|audio|source|iframe|embed|area)[^>]*\s(?:href|src|action)=["'])\//gi,
       `$1${proxyPath}/`
@@ -341,29 +355,27 @@ function rewriteHtml(text, targetUrl, proxyPath, workerDomain) {
     );
 
   // 应用 replace_dict 自定义文本替换
-  if (Object.keys(replace_dict).length > 0) {
-    result = applyReplaceDict(result, targetUrl.host, workerDomain);
+  if (Object.keys(replaceDict).length > 0) {
+    result = applyReplaceDict(result, targetUrl.host, workerDomain, replaceDict);
   }
 
   return result;
 }
 
 // --- replace_dict 文本替换 ---
-function applyReplaceDict(text, upstreamDomain, customDomain) {
+function applyReplaceDict(text, upstreamDomain, customDomain, dict) {
   let result = text;
 
-  for (const [keyRaw, valueRaw] of Object.entries(replace_dict)) {
+  for (const [keyRaw, valueRaw] of Object.entries(dict)) {
     let search = keyRaw;
     let replace = valueRaw;
 
-    // 解析占位符
     if (search === "$upstream") search = upstreamDomain;
     else if (search === "$custom_domain") search = customDomain;
 
     if (replace === "$upstream") replace = upstreamDomain;
     else if (replace === "$custom_domain") replace = customDomain;
 
-    // 全局替换
     result = result.split(search).join(replace);
   }
 
