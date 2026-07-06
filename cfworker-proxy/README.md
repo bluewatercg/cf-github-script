@@ -2,6 +2,18 @@
 
 ## 反向代理 Worker — 配置说明
 
+```
+https://worker域名/https://google.com
+https://worker域名/https://google.com/search?q=test
+
+https://worker域名/google.com
+https://worker域名/google.com/search?q=test
+
+# http 不可省略协议头
+https://worker域名/http://example.com
+https://worker域名/http://127.0.0.1:8080
+```
+
 ## 目录
 
 1. [配置方式概述](#1-配置方式概述)
