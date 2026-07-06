@@ -1,40 +1,150 @@
+// ================= 配置区域 =================
+
+// 屏蔽的国家/地区代码（ISO 3166-1 alpha-2），空数组表示不屏蔽
+// 例如：["KP", "SY", "PK", "CU"]
+const blocked_region = [];
+
+// 屏蔽的 IP 地址，空数组表示不屏蔽
+const blocked_ip_address = [];
+
+// 自定义文本替换规则（在 HTML 中额外替换指定文本）
+// 支持占位符：
+//   $upstream      = 目标域名（如 example.com）
+//   $custom_domain = 当前 Worker 域名
+// 例如：{ "$upstream": "$custom_domain", "旧文本": "新文本" }
+const replace_dict = {};
+
+// 动态请求头规则：按域名配置对请求头的处理方式
+//   "KEEP"   = 保留原始值（不覆盖）
+//   "DELETE" = 删除该请求头
+//   其他字符串 = 设置为该值
+//   "*"      = 通配规则，所有域名均生效（优先级低于具体域名规则）
+const specialCases = {
+  // 示例：对所有域名生效
+  // "*": {
+  //   "Origin": "DELETE",
+  //   "Referer": "DELETE",
+  // },
+  // 示例：仅对 example.com 生效
+  // "example.com": {
+  //   "X-Custom-Header": "my-value",
+  // },
+};
+// ============================================
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const workerDomain = url.host; // 当前 Worker 的域名
+    const workerDomain = url.host;
 
-    // ================= 1. 从路径中提取目标 URL =================
+    // ================= 1. 区域 / IP 屏蔽检查 =================
+    const region = request.headers.get("cf-ipcountry") || "";
+    const ipAddress = request.headers.get("cf-connecting-ip") || "";
+
+    if (blocked_region.length > 0 && blocked_region.includes(region.toUpperCase())) {
+      return new Response("Access denied: This service is not available in your region.", {
+        status: 403,
+      });
+    }
+
+    if (blocked_ip_address.length > 0 && blocked_ip_address.includes(ipAddress)) {
+      return new Response("Access denied: Your IP address is blocked.", {
+        status: 403,
+      });
+    }
+    // ==========================================================
+
+    // ================= 2. 根路径 → 着陆页 =================
+    if (url.pathname === "/") {
+      return new Response(
+        `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>反向代理服务</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #333; min-height: 100vh; display: flex; flex-direction: column; }
+    header { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #fff; padding: 40px 20px; text-align: center; }
+    header h1 { font-size: 2em; margin-bottom: 8px; }
+    header p { opacity: 0.85; font-size: 1.1em; }
+    .container { max-width: 800px; margin: 0 auto; padding: 30px 20px; flex: 1; }
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 24px; margin-bottom: 20px; }
+    .card h2 { font-size: 1.3em; margin-bottom: 12px; color: #1a1a2e; }
+    code { background: #e8ecf1; padding: 3px 8px; border-radius: 4px; font-size: 0.9em; word-break: break-all; }
+    .example { background: #f7f8fa; border-left: 4px solid #4a6cf7; padding: 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+    .example code { display: block; margin-top: 6px; }
+    ul { padding-left: 20px; line-height: 1.8; }
+    footer { text-align: center; padding: 20px; color: #888; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🌐 反向代理服务</h1>
+    <p>基于 Cloudflare Workers 的轻量级请求转发代理</p>
+  </header>
+  <div class="container">
+    <div class="card">
+      <h2>📖 使用方式</h2>
+      <p>在服务域名后直接拼接目标 URL 即可：</p>
+      <div class="example">
+        <strong>示例：</strong>
+        <code>https://${workerDomain}/https://example.com</code>
+        <code>https://${workerDomain}/https://example.com/path?query=1</code>
+        <code>https://${workerDomain}/http://example.com:8080</code>
+      </div>
+    </div>
+    <div class="card">
+      <h2>✨ 功能特性</h2>
+      <ul>
+        <li>支持 HTTPS / HTTP 目标</li>
+        <li>支持 WebSocket 代理 (wss://)</li>
+        <li>HTML 链接自动重写，页面内跳转仍走代理</li>
+        <li>CORS 跨域支持</li>
+        <li>Cookie 自动适配</li>
+        <li>重定向拦截</li>
+      </ul>
+    </div>
+  </div>
+  <footer>Powered by Cloudflare Workers</footer>
+</body>
+</html>`,
+        {
+          headers: { "content-type": "text/html;charset=UTF-8" },
+          status: 200,
+        }
+      );
+    }
+    // ==========================================================
+
+    // ================= 3. 从路径中提取目标 URL =================
     // 支持三种格式：
     //   /https://example.com/path   → https://example.com/path
     //   /http://example.com/path    → http://example.com/path
-    //   /example.com/path           → https://example.com/path（默认补 https）
-    // 注：URL 中双斜杠 // 在 pathname 中会被压缩为单斜杠 /，
-    // 因此 https://example.com 入站后 pathname 为 /https:/example.com
-    let rawPath = url.pathname.slice(1); // 去掉开头的 /
+    //   /example.com/path           → https://example.com/path
+    const rawPath = url.pathname.slice(1);
 
     let targetUrlStr;
     if (/^https?:\/[^/]/.test(rawPath)) {
-      // 匹配 https:/x 或 http:/x，还原被压缩的双斜杠
       targetUrlStr = rawPath.replace(/^(https?):\//, '$1://');
     } else if (rawPath.includes('://')) {
-      // 兜底：如果 pathname 意外保留了完整协议
       targetUrlStr = rawPath;
-    } else if (rawPath === '') {
+    } else if (!rawPath) {
       return new Response('请指定目标地址，例如: https://worker域名/https://example.com', {
         status: 400,
         headers: { 'Content-Type': 'text/plain; charset=utf-8' }
       });
     } else {
-      // 没有协议，默认补 https
       targetUrlStr = 'https://' + rawPath;
     }
 
-    const targetUrl = new URL(targetUrlStr + url.search);
-    // 代理路径前缀，用作后续 URL 重写（例如 /https:/example.com）
+    // search 和 hash
+    const targetUrl = new URL(targetUrlStr + url.search + url.hash);
     const proxyPath = '/' + targetUrlStr;
     // ============================================================
 
-    // ================= 2. 复制并清洗请求头 =================
+    // ================= 4. 复制并清洗请求头 =================
     const newHeaders = new Headers(request.headers);
     newHeaders.set("Host", targetUrl.host);
     newHeaders.set("Referer", targetUrl.origin);
@@ -43,58 +153,34 @@ export default {
     newHeaders.delete("cf-ipcountry");
     newHeaders.delete("cf-ray");
     newHeaders.delete("cf-visitor");
+
+    // specialCases 动态头规则
+    applySpecialCases(newHeaders, targetUrl.host);
     // ============================================================
 
-    // ================= 3. 【新增】WebSocket 代理 =================
+    // ================= 5. WebSocket 代理 =================
     if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
       return handleWebSocket(targetUrl);
     }
     // ============================================================
 
-    // ================= 4. 发起对目标网站的 HTTP 请求 =================
+    // ================= 6. 发起对目标网站的 HTTP 请求 =================
     try {
       const response = await fetch(targetUrl.toString(), {
         method: request.method,
         headers: newHeaders,
-        // 【优化】GET/HEAD 请求不携带 body，避免兼容性问题
         body: ['GET', 'HEAD'].includes(request.method) ? null : request.body,
-        redirect: "manual" // 手动处理重定向
+        redirect: "manual"
       });
 
-      // ================= 5. 处理响应头 =================
-      let modifiedHeaders = new Headers();
-
-      for (const [key, value] of response.headers.entries()) {
-        const lowerKey = key.toLowerCase();
-
-        // 【优化】移除 Content-Security-Policy，防止原站 CSP 限制代理后的资源加载
-        if (lowerKey === 'content-security-policy' || lowerKey === 'content-security-policy-report-only') {
-          continue;
-        }
-
-        // 【优化】移除 Strict-Transport-Security，防止其作用于 Worker 域名
-        if (lowerKey === 'strict-transport-security') {
-          continue;
-        }
-
-        // 【优化】重写 Set-Cookie 中的 Domain 属性
-        // 原站 Domain=.example.com 的 Cookie 会被浏览器拒绝，因为当前域名是 Worker 域名
-        // 策略：移除 Domain 属性，让浏览器自动将 Cookie 作用域限制在当前 Worker 域名下
-        if (lowerKey === 'set-cookie') {
-          const newValue = value.replace(/;\s*domain\s*=\s*[^;]+\s*/gi, '');
-          modifiedHeaders.append(key, newValue);
-          continue;
-        }
-
-        modifiedHeaders.append(key, value);
-      }
+      // ================= 7. 处理响应头 =================
+      let modifiedHeaders = buildModifiedHeaders(response, workerDomain, targetUrl);
       // =================================================
 
-      // ================= 6. 重定向拦截 =================
+      // ================= 8. 重定向拦截 =================
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         let location = modifiedHeaders.get("Location");
         if (location) {
-          // 如果重定向包含目标域名，替换为当前 Worker 域名
           if (location.includes(targetUrl.host)) {
             location = location.replace(targetUrl.host, workerDomain);
             location = location.replace(/^http:/, "https:");
@@ -104,12 +190,11 @@ export default {
       }
       // =================================================
 
-      // ================= 7. 注入 CORS 头 =================
+      // ================= 9. 注入 CORS + Vary =================
       modifiedHeaders.set("Access-Control-Allow-Origin", "*");
       modifiedHeaders.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
       modifiedHeaders.set("Access-Control-Allow-Headers", "*");
 
-      // 【优化】添加 Vary: Origin 头，配合 CORS 防止缓存污染
       if (modifiedHeaders.has("Vary")) {
         const vary = modifiedHeaders.get("Vary");
         if (!vary.split(',').map(v => v.trim()).includes('Origin')) {
@@ -120,60 +205,24 @@ export default {
       }
       // =================================================
 
-      // OPTIONS 预检请求直接返回
       if (request.method === "OPTIONS") {
-        return new Response(null, {
-          status: 204,
-          headers: modifiedHeaders
-        });
+        return new Response(null, { status: 204, headers: modifiedHeaders });
       }
 
-      // ================= 8. 【优化】HTML 响应中的链接重写 =================
-      // 将响应体中所有指向原站的 URL 替换为代理路径
-      // 让用户点击页面内的链接、加载图片/脚本等资源时仍然经过 Worker
+      // ================= 10. HTML 响应处理 =================
       const contentType = modifiedHeaders.get("Content-Type") || '';
 
       if (contentType.includes('text/html')) {
         const text = await response.text();
-
-        // 转义目标源的正则特殊字符
-        const escapedOrigin = targetUrl.origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-        // 分两步重写：
-        //   a) 绝对 URL：将 href/src/action 中的 https://example.com 替换为代理前缀
-        //   b) 根相对路径：将 href/src/action 中的 /path 替换为 /https:/example.com/path
-        const rewrittenText = text
-          // a) 重写绝对 URL（href、src、action、srcset、formaction）
-          .replace(
-            new RegExp(`((?:href|src|action|srcset|formaction)=["'])${escapedOrigin}`, 'gi'),
-            `$1${proxyPath}`
-          )
-          // 也处理 inline CSS 中的 url(https://example.com/...)
-          .replace(
-            new RegExp(`(url\\(["']?)${escapedOrigin}`, 'gi'),
-            `$1${proxyPath}`
-          )
-          // b) 重写根相对路径（/path → /https:/example.com/path）
-          // 仅针对 HTML 标签中常见的资源属性
-          .replace(
-            /(<(?:a|base|form|img|link|script|video|audio|source|iframe|embed|area)[^>]*\s(?:href|src|action)=["'])\//gi,
-            `$1${proxyPath}/`
-          )
-          // c) 重写 <base> 标签的 href，防止其干扰 URL 解析
-          .replace(
-            new RegExp(`(<base[^>]*\\shref=["'])${escapedOrigin}`, 'gi'),
-            `$1${proxyPath}`
-          );
-
+        const rewrittenText = rewriteHtml(text, targetUrl, proxyPath, workerDomain);
         return new Response(rewrittenText, {
           status: response.status,
           statusText: response.statusText,
           headers: modifiedHeaders
         });
       }
-      // ============================================================
+      // ====================================================
 
-      // 非 HTML 响应直接透传
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
@@ -189,29 +238,134 @@ export default {
   }
 };
 
-// ================= WebSocket 代理处理函数 =================
-// 将客户端的 WebSocket 连接透明地转发到目标服务器
-async function handleWebSocket(targetUrl) {
-  // 将目标 URL 从 http(s) 协议转换为 ws(s) 协议
-  // https://example.com/path → wss://example.com/path
-  const targetWsUrl = targetUrl.toString().replace(/^http/, 'ws');
+// ================= 辅助函数 =================
 
-  // 通过 fetch 发起 WebSocket 升级请求
+// --- 处理响应头 ---
+function buildModifiedHeaders(response, workerDomain, targetUrl) {
+  const modifiedHeaders = new Headers();
+
+  for (const [key, value] of response.headers.entries()) {
+    const lowerKey = key.toLowerCase();
+
+    if (lowerKey === 'content-security-policy' || lowerKey === 'content-security-policy-report-only') {
+      continue;
+    }
+
+    if (lowerKey === 'strict-transport-security') {
+      continue;
+    }
+
+    if (lowerKey === 'clear-site-data') {
+      continue;
+    }
+
+    if (lowerKey === 'set-cookie') {
+      const newValue = value.replace(/;\s*domain\s*=\s*[^;]+\s*/gi, '');
+      modifiedHeaders.append(key, newValue);
+      continue;
+    }
+
+    modifiedHeaders.append(key, value);
+  }
+
+  return modifiedHeaders;
+}
+
+// --- WebSocket 代理 ---
+async function handleWebSocket(targetUrl) {
+  const targetWsUrl = targetUrl.toString().replace(/^http/, 'ws');
   const wsResponse = await fetch(targetWsUrl);
 
-  // 如果目标服务器成功升级为 WebSocket 连接
   if (wsResponse.status === 101 && wsResponse.webSocket) {
-    // 接受 WebSocket 连接，开始消息转发
     wsResponse.webSocket.accept();
-
-    // 返回 101 响应，将目标 WebSocket 与客户端自动配对
-    // Workers 运行时会自动在客户端和目标之间转发消息
     return new Response(null, {
       status: 101,
       webSocket: wsResponse.webSocket,
     });
   }
 
-  // 如果目标服务器未升级（可能返回 4xx 或其他），透传原始响应
   return wsResponse;
+}
+
+// --- specialCases 动态头规则 ---
+function applySpecialCases(headers, hostname) {
+  // 先应用通配规则 *
+  if (specialCases["*"]) {
+    applyRules(headers, specialCases["*"]);
+  }
+  // 再应用具体域名规则（覆盖通配）
+  if (specialCases[hostname]) {
+    applyRules(headers, specialCases[hostname]);
+  }
+}
+
+function applyRules(headers, rules) {
+  for (const [key, value] of Object.entries(rules)) {
+    switch (value) {
+      case "KEEP":
+        break; // 不做任何操作，保留原始值
+      case "DELETE":
+        headers.delete(key);
+        break;
+      default:
+        headers.set(key, value);
+        break;
+    }
+  }
+}
+
+// --- HTML 重写 ---
+function rewriteHtml(text, targetUrl, proxyPath, workerDomain) {
+  const escapedOrigin = targetUrl.origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  let result = text
+    // a) 重写绝对 URL（href、src、action、srcset、formaction）
+    .replace(
+      new RegExp(`((?:href|src|action|srcset|formaction)=["'])${escapedOrigin}`, 'gi'),
+      `$1${proxyPath}`
+    )
+    // b) 处理 inline CSS 中的 url()
+    .replace(
+      new RegExp(`(url\\(["']?)${escapedOrigin}`, 'gi'),
+      `$1${proxyPath}`
+    )
+    // c) 重写根相对路径（/path → /https:/example.com/path）
+    .replace(
+      /(<(?:a|base|form|img|link|script|video|audio|source|iframe|embed|area)[^>]*\s(?:href|src|action)=["'])\//gi,
+      `$1${proxyPath}/`
+    )
+    // d) 重写 <base> 标签
+    .replace(
+      new RegExp(`(<base[^>]*\\shref=["'])${escapedOrigin}`, 'gi'),
+      `$1${proxyPath}`
+    );
+
+  // 应用 replace_dict 自定义文本替换
+  if (Object.keys(replace_dict).length > 0) {
+    result = applyReplaceDict(result, targetUrl.host, workerDomain);
+  }
+
+  return result;
+}
+
+// --- replace_dict 文本替换 ---
+function applyReplaceDict(text, upstreamDomain, customDomain) {
+  let result = text;
+
+  for (const [keyRaw, valueRaw] of Object.entries(replace_dict)) {
+    let search = keyRaw;
+    let replace = valueRaw;
+
+    // 解析占位符
+    if (search === "$upstream") search = upstreamDomain;
+    else if (search === "$custom_domain") search = customDomain;
+
+    if (replace === "$upstream") replace = upstreamDomain;
+    else if (replace === "$custom_domain") replace = customDomain;
+
+    // 全局替换
+    result = result.split(search).join(replace);
+  }
+
+  return result;
 }
