@@ -6,13 +6,8 @@ async function handleRequest(request) {
   // ✅ 使用你的真实项目地址
   const targetBase = 'https://p3000--moon--n5s5yfbl2y6k.code.run/'
   
-  if (request.headers.get('Upgrade') === 'websocket') {
-    return fetch(request)
-  }
-
   const url = new URL(request.url)
   const newUrl = new URL(url.pathname + url.search, targetBase)
-  
   const newHeaders = new Headers(request.headers)
   newHeaders.set('Host', newUrl.hostname)
   
